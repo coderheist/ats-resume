@@ -1,0 +1,67 @@
+# Core API
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9   # required by FastAPI for UploadFile (multipart/form-data) -- app/api/routes/resume.py
+
+# Data layer
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+
+# Scoring engine (dev/scaffold fallback)
+scikit-learn>=1.4
+numpy>=1.26
+
+# Resume file parsing (app/core/parsing/file_extraction.py) -- lightweight,
+# always-available tier for normal text-based PDF/DOCX resumes. See that
+# module's docstring for why this is a different tier from docling/marker
+# below, and what it doesn't handle (scanned PDFs, complex multi-column
+# layouts).
+pypdf>=4.0
+python-docx>=1.1
+
+# Testing
+pytest>=8.0
+httpx2>=2.0   # required by starlette's TestClient (fastapi.testclient) --
+              # NOT the older "httpx" package, which this starlette version
+              # no longer accepts for TestClient (see tests/test_resume_routes.py)
+
+# LLM providers -- Basic/Medium/Advanced tier selector (app/core/llm/router.py's
+# Tier enum) needs all three installed to actually offer all three tiers at
+# request time, which is different from the old "just pick one provider via
+# LLM_PROVIDER" story -- these are required, not the pick-one-of-three
+# optional set they used to be. All three route through one shared
+# implementation, app/core/llm/langchain_backend.py -- see that module's
+# docstring for why LangChain instead of three hand-rolled per-vendor
+# request/response translation layers.
+langchain-core>=1.5
+langgraph>=1.2               # orchestrates the LLM-then-heuristic-fallback flow
+                              # in app/core/parsing/resume_extraction.py
+langchain-anthropic>=1.5    # Advanced tier (Claude) -- requires ANTHROPIC_API_KEY
+langchain-google-genai>=4.3 # Medium tier (Gemini)   -- requires GEMINI_API_KEY
+langchain-groq>=1.1         # Basic tier (Groq)      -- requires GROQ_API_KEY
+
+# --- Production-only, not required by this scaffold's tests ---
+# sentence-transformers>=2.6   # SBERT embeddings (app/core/scoring/embeddings.py)
+# anthropic>=0.121             # Raw Anthropic SDK -- ONLY needed for the real
+#                               # Batch API (batch_resume_extraction.py /
+#                               # batch_candidate_narratives.py, 50% off async
+#                               # bulk jobs). NOT needed for the Advanced tier's
+#                               # synchronous calls -- that's langchain-anthropic
+#                               # above. See claude_client.py's docstring: these
+#                               # are two different code paths in the same file.
+# openai>=2.53                 # OpenAI-*compatible* client used for the open-weight
+#                               # extraction crosscheck model, NOT for OpenAI's own API
+#                               # (app/core/llm/oss_extraction_client.py) -- points at a
+#                               # self-hosted vLLM/SGLang endpoint or a hosted open-weight
+#                               # inference provider via OSS_EXTRACTION_BASE_URL (this can
+#                               # also be pointed at Groq's OpenAI-compatible endpoint --
+#                               # see that module's docstring -- independent of the
+#                               # tier selector above, which only covers the other
+#                               # four task types).
+# docling>=1.0                 # layout-aware document parsing, optional upgrade over the
+#                               # pypdf/python-docx tier above for scanned/complex-layout
+#                               # resumes (app/core/parsing/parser_interface.py + file_extraction.py)
+# marker-pdf>=1.0               # fallback parsing for scanned/degraded PDFs
+# pgvector>=0.2                # Python client for the pgvector column type
+# alembic>=1.19                # DB migrations (see "Database migrations" below)

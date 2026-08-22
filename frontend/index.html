@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dossier — Resume Optimizer Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">
+    <span class="wordmark-mark">01</span>
+    <div>
+      <h1>Dossier</h1>
+      <p class="tagline">Reference console — Dual-Mode AI ATS backend</p>
+    </div>
+  </div>
+  <div class="api-config">
+    <label for="api-base">API base</label>
+    <input type="text" id="api-base" spellcheck="false" autocomplete="off" />
+    <span class="api-status" id="api-status" title="Backend connection status">●</span>
+  </div>
+</header>
+
+<nav class="folder-tabs" role="tablist" aria-label="Console mode">
+  <button class="tab" data-panel="panel-jd-match" role="tab" aria-selected="true">JD&nbsp;Match</button>
+  <button class="tab" data-panel="panel-standalone" role="tab" aria-selected="false">Standalone</button>
+  <button class="tab" data-panel="panel-bias-audit" role="tab" aria-selected="false">Bias&nbsp;Audit</button>
+  <button class="tab" data-panel="panel-voice" role="tab" aria-selected="false">Voice&nbsp;Editor</button>
+  <button class="tab" data-panel="panel-gap-resolution" role="tab" aria-selected="false">Gap&nbsp;Resolution</button>
+  <button class="tab" data-panel="panel-pricing" role="tab" aria-selected="false">Pricing</button>
+</nav>
+
+<main class="folder-body">
+
+  <!-- ===================== JD MATCH ===================== -->
+  <section id="panel-jd-match" class="panel" role="tabpanel">
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 1 — POST /score/jd-match</p>
+      <h2>Score a resume against one job description</h2>
+      <p class="lede">FinalScore = 0.5 × semantic fit + 0.3 × skill match + 0.2 × experience match. Every score returns the full breakdown below it — never a bare number.</p>
+    </div>
+
+    <div class="workspace two-col">
+      <div class="input-card">
+        <div class="input-card-head">
+          <label>Resume</label>
+          <button class="link-btn" data-sample="resume" data-target="jd-match-resume">Load sample</button>
+        </div>
+        <div class="resume-mode-tabs" role="tablist">
+          <button type="button" class="resume-mode-tab active" data-resume-prefix="jd-match" data-resume-mode="file">Upload file</button>
+          <button type="button" class="resume-mode-tab" data-resume-prefix="jd-match" data-resume-mode="paste">Paste text</button>
+          <button type="button" class="resume-mode-tab" data-resume-prefix="jd-match" data-resume-mode="json">Paste JSON</button>
+        </div>
+
+        <div class="llm-tier-select" data-resume-prefix="jd-match" role="radiogroup" aria-label="LLM tier for parsing">
+          <span class="tier-select-label">Parse with</span>
+          <button type="button" class="tier-btn active" data-resume-prefix="jd-match" data-tier="basic" role="radio" aria-checked="true">Basic <span class="tier-provider">Groq</span></button>
+          <button type="button" class="tier-btn" data-resume-prefix="jd-match" data-tier="medium" role="radio" aria-checked="false">Medium <span class="tier-provider">Gemini</span></button>
+          <button type="button" class="tier-btn" data-resume-prefix="jd-match" data-tier="advanced" role="radio" aria-checked="false">Advanced <span class="tier-provider">Claude</span></button>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="jd-match" data-resume-mode-panel="file">
+          <label class="file-drop" for="jd-match-file-input">
+            <input type="file" id="jd-match-file-input" accept=".pdf,.docx" hidden />
+            <span class="file-drop-text">Click to choose a resume — PDF or DOCX</span>
+            <span class="file-drop-filename" id="jd-match-file-name"></span>
+          </label>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="jd-match" data-resume-mode-panel="paste" hidden>
+          <textarea class="code-input resume-paste-input" id="jd-match-paste-input" placeholder="Paste the full text of your resume here…"></textarea>
+          <div class="resume-mode-panel-footer">
+            <button type="button" class="secondary-btn" data-resume-parse="jd-match" data-resume-parse-mode="paste">Parse resume</button>
+          </div>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="jd-match" data-resume-mode-panel="json" hidden>
+          <textarea id="jd-match-resume" class="code-input" spellcheck="false"></textarea>
+        </div>
+
+        <div class="resume-parse-status" id="jd-match-parse-status"></div>
+        <div class="resume-preview" id="jd-match-resume-preview" hidden></div>
+      </div>
+      <div class="input-card">
+        <div class="input-card-head">
+          <label for="jd-match-jd">Job description text</label>
+          <button class="link-btn" data-sample="jd" data-target="jd-match-jd">Load sample</button>
+        </div>
+        <textarea id="jd-match-jd" class="code-input" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="primary-btn" id="run-jd-match">Run match score</button>
+      <span class="inline-status" id="jd-match-status"></span>
+    </div>
+
+    <div class="result-area" id="jd-match-result"></div>
+  </section>
+
+  <!-- ===================== STANDALONE ===================== -->
+  <section id="panel-standalone" class="panel" role="tabpanel" hidden>
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 2 — POST /score/standalone</p>
+      <h2>JD-less ATS readiness score</h2>
+      <p class="lede">No job description needed — infers the candidate's role, then checks structural completeness and action-verb / quantified-metric density in the work highlights.</p>
+    </div>
+
+    <div class="workspace one-col">
+      <div class="input-card">
+        <div class="input-card-head">
+          <label>Resume</label>
+          <button class="link-btn" data-sample="resume" data-target="standalone-resume">Load sample</button>
+        </div>
+        <div class="resume-mode-tabs" role="tablist">
+          <button type="button" class="resume-mode-tab active" data-resume-prefix="standalone" data-resume-mode="file">Upload file</button>
+          <button type="button" class="resume-mode-tab" data-resume-prefix="standalone" data-resume-mode="paste">Paste text</button>
+          <button type="button" class="resume-mode-tab" data-resume-prefix="standalone" data-resume-mode="json">Paste JSON</button>
+        </div>
+
+        <div class="llm-tier-select" data-resume-prefix="standalone" role="radiogroup" aria-label="LLM tier for parsing">
+          <span class="tier-select-label">Parse with</span>
+          <button type="button" class="tier-btn active" data-resume-prefix="standalone" data-tier="basic" role="radio" aria-checked="true">Basic <span class="tier-provider">Groq</span></button>
+          <button type="button" class="tier-btn" data-resume-prefix="standalone" data-tier="medium" role="radio" aria-checked="false">Medium <span class="tier-provider">Gemini</span></button>
+          <button type="button" class="tier-btn" data-resume-prefix="standalone" data-tier="advanced" role="radio" aria-checked="false">Advanced <span class="tier-provider">Claude</span></button>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="standalone" data-resume-mode-panel="file">
+          <label class="file-drop" for="standalone-file-input">
+            <input type="file" id="standalone-file-input" accept=".pdf,.docx" hidden />
+            <span class="file-drop-text">Click to choose a resume — PDF or DOCX</span>
+            <span class="file-drop-filename" id="standalone-file-name"></span>
+          </label>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="standalone" data-resume-mode-panel="paste" hidden>
+          <textarea class="code-input resume-paste-input" id="standalone-paste-input" placeholder="Paste the full text of your resume here…"></textarea>
+          <div class="resume-mode-panel-footer">
+            <button type="button" class="secondary-btn" data-resume-parse="standalone" data-resume-parse-mode="paste">Parse resume</button>
+          </div>
+        </div>
+
+        <div class="resume-mode-panel" data-resume-prefix="standalone" data-resume-mode-panel="json" hidden>
+          <textarea id="standalone-resume" class="code-input" spellcheck="false"></textarea>
+        </div>
+
+        <div class="resume-parse-status" id="standalone-parse-status"></div>
+        <div class="resume-preview" id="standalone-resume-preview" hidden></div>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="primary-btn" id="run-standalone">Run readiness score</button>
+      <span class="inline-status" id="standalone-status"></span>
+    </div>
+
+    <div class="result-area" id="standalone-result"></div>
+  </section>
+
+  <!-- ===================== BIAS AUDIT ===================== -->
+  <section id="panel-bias-audit" class="panel" role="tabpanel" hidden>
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 3 — POST /bias-audit/jd</p>
+      <h2>Scan a job description for coded-language skew</h2>
+      <p class="lede">Flags a job post when agentic-coded language ("dominant," "aggressive") outweighs communal-coded language by a threshold, and suggests neutral rewrites — a simple, auditable word-list model rather than an opaque classifier.</p>
+    </div>
+
+    <div class="workspace one-col">
+      <div class="input-card">
+        <div class="input-card-head">
+          <label for="bias-jd">Job description text</label>
+          <span class="sample-btn-group">
+            <button class="link-btn" data-sample="jd-biased" data-target="bias-jd">Load biased sample</button>
+            <button class="link-btn" data-sample="jd-neutral" data-target="bias-jd">Load neutral sample</button>
+          </span>
+        </div>
+        <textarea id="bias-jd" class="code-input" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="primary-btn" id="run-bias-audit">Scan for bias</button>
+      <span class="inline-status" id="bias-audit-status"></span>
+    </div>
+
+    <div class="result-area" id="bias-audit-result"></div>
+  </section>
+
+  <!-- ===================== VOICE EDITOR ===================== -->
+  <section id="panel-voice" class="panel" role="tabpanel" hidden>
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 4 — POST /voice/turn</p>
+      <h2>Voice-editing agent loop</h2>
+      <p class="lede">The agent asks one targeted question at a time until it has enough to write a strong bullet — never firing a question for every utterance, never generating from vague input. Speech-to-text and slot extraction are LLM steps this scaffold doesn't invoke live (see README) — the fields below stand in for what a live transcript would supply.</p>
+    </div>
+
+    <div class="voice-layout">
+      <div class="voice-transcript-pane">
+        <div class="transcript-head">
+          <span>Session <code id="voice-session-id">—</code></span>
+          <button class="link-btn" id="voice-restart">Start new session</button>
+        </div>
+        <div class="transcript" id="voice-transcript"></div>
+        <form class="voice-input-row" id="voice-form">
+          <input type="text" id="voice-answer" placeholder="Type your answer…" autocomplete="off" disabled />
+          <button type="submit" class="primary-btn" id="voice-send" disabled>Send</button>
+        </form>
+      </div>
+      <aside class="voice-draft-pane">
+        <p class="eyebrow">Filled slots</p>
+        <dl class="slot-list" id="voice-slots">
+          <div class="slot-empty">Nothing captured yet.</div>
+        </dl>
+        <div id="voice-generate-block" hidden>
+          <p class="eyebrow">Ready to generate</p>
+          <div class="draft-bullet" id="voice-draft-bullet"></div>
+          <p class="draft-note">Template preview, not AI-generated — wire <code>ANTHROPIC_API_KEY</code> to the conversational agent for real bullet generation (see <code>app/core/llm/voice_system_prompt.py</code>).</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===================== GAP RESOLUTION ===================== -->
+  <section id="panel-gap-resolution" class="panel" role="tabpanel" hidden>
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 1 extension — POST /voice/gap-prompt + /voice/gap-answer</p>
+      <h2>Close the loop on a skill gap</h2>
+      <p class="lede">Turns each JD Match skill gap into one targeted question at a time. Answer it and the resume is patched and rescored immediately — the score panel shows the before/after delta, no re-upload needed. Reach this from the JD&nbsp;Match tab's "Resolve gaps conversationally" button, or load the built-in sample pair below.</p>
+    </div>
+
+    <div class="voice-layout">
+      <div class="voice-transcript-pane">
+        <div class="transcript-head">
+          <span id="gap-resolution-source-label">No resume/JD loaded yet</span>
+          <button class="link-btn" id="gap-resolution-load-sample">Load sample pair</button>
+        </div>
+        <div class="transcript" id="gap-resolution-transcript"></div>
+        <form class="voice-input-row" id="gap-resolution-form">
+          <input type="text" id="gap-resolution-answer" placeholder="Load a resume + JD to begin…" autocomplete="off" disabled />
+          <button type="submit" class="primary-btn" id="gap-resolution-send" disabled>Send</button>
+        </form>
+      </div>
+      <aside class="voice-draft-pane">
+        <p class="eyebrow">Live score</p>
+        <div id="gap-resolution-score-block">
+          <p class="slot-empty">Start the loop to see a live score.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===================== PRICING ===================== -->
+  <section id="panel-pricing" class="panel" role="tabpanel" hidden>
+    <div class="panel-intro">
+      <p class="eyebrow">Mode 5 — GET /billing/tiers</p>
+      <h2>Pricing tiers</h2>
+      <p class="lede">Served straight from the product config — no billing provider wired up in this scaffold.</p>
+    </div>
+    <div class="result-area" id="pricing-result"></div>
+  </section>
+
+</main>
+
+<footer class="foot-note">
+  <p>Reference frontend for the Dual-Mode AI ATS &amp; Conversational Resume Optimizer backend. Talks to a locally-running FastAPI instance — nothing here is deployed or persisted beyond this browser tab.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
