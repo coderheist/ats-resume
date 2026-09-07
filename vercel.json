@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd frontend-react && npm ci",
+  "buildCommand": "cd frontend-react && npm run build",
+  "outputDirectory": "frontend-react-dist",
+  "rewrites": [
+    { "source": "/dashboard", "destination": "/index.html" },
+    { "source": "/settings", "destination": "/index.html" },
+    { "source": "/history", "destination": "/index.html" },
+    { "source": "/login", "destination": "/index.html" },
+    { "source": "/signup", "destination": "/index.html" }
+  ]
+}
