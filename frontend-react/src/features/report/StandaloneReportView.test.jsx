@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiPost, apiPostFile } from "../../lib/api";
 import { StandaloneReportView } from "./StandaloneReportView";
@@ -85,6 +86,45 @@ describe("StandaloneReportView", () => {
     await waitFor(() => expect(screen.getByText("software_engineer")).toBeInTheDocument());
     expect(screen.getByText("certifications")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Add a metric here.")).toBeInTheDocument());
+  });
+
+  it("pops the limit dialog -- not just an error box -- when the month's scans are spent", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockRejectedValue(Object.assign(new Error("You've used all 10 scans included in the Free plan this month."), {
+      status: 429,
+      detail: {
+        error: "scan_limit_reached", message: "You've used all 10 scans included in the Free plan this month.",
+        used: 10, limit: 10, resets_at: "2099-10-01T00:00:00Z",
+      },
+    }));
+
+    // Wrapped in a router only because the dialog links to /pricing --
+    // the view itself has no routing of its own.
+    render(<MemoryRouter><StandaloneReportView /></MemoryRouter>);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/all 10 scans/i);
+    expect(dialog).toHaveTextContent(/Resets/);
+    expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute("href", "/pricing");
+
+    fireEvent.click(screen.getByRole("button", { name: /not now/i }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("leaves ordinary failures as an inline error box, with no dialog", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockRejectedValue(Object.assign(new Error("Internal Server Error"), { status: 500, detail: "Internal Server Error" }));
+
+    render(<MemoryRouter><StandaloneReportView /></MemoryRouter>);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    await waitFor(() => expect(screen.getByText(/Internal Server Error/)).toBeInTheDocument());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("still shows the score if the suggestions call fails independently", async () => {

@@ -139,6 +139,7 @@ Tracing `POST /score/full-report` from a signed-in user:
 5.  _resolve_user         AuthenticatedUser → local User row (created on demand)
                           ↓
 6.  _enforce_entitlement  Monthly scan allowance → 429 when exceeded
+                          (body names the reset instant; UI pops a dialog)
                           ↓
 7.  screen_resume_against_jd()
                           Requirement extraction → matching → 7 dimensions
@@ -542,7 +543,7 @@ because Firebase already handled account creation by the time it is reached.
 dataclasses, so billing logic, upgrade prompts, and the pricing page all read the
 same numbers.
 
-**Consumer tiers:** Free ($0, 3 scans/mo) · Starter ($15/mo, $108/yr, unlimited
+**Consumer tiers:** Free ($0, 10 scans/mo) · Starter ($15/mo, $108/yr, unlimited
 scans) · Pro ($29/mo, $216/yr, + 60 voice min) · Pro+ ($45/mo, uncapped voice)
 
 **Business tiers:** Team ($79/mo) · Business ($149/mo, + SSO)

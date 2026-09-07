@@ -47,6 +47,37 @@ describe("DashboardPage", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: "Upgrade" })).toBeInTheDocument());
   });
 
+  it("shows when the allowance resets alongside the usage bar", async () => {
+    apiGet.mockImplementation((path) => {
+      if (path === "/auth/me") return Promise.resolve({
+        tier: "free", tier_name: "Free", jd_match_scans_per_month: 10,
+        jd_match_scans_used_this_month: 4, jd_match_scans_exhausted: false,
+        jd_match_scans_reset_at: "2099-10-01T00:00:00Z",
+      });
+      if (path === "/history") return Promise.resolve({ history: [] });
+      return Promise.reject(new Error("unexpected"));
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/4 of 10 scans used/i)).toBeInTheDocument());
+    expect(screen.getByText(/^Resets .*your local time/)).toBeInTheDocument();
+    expect(screen.queryByText(/out of scans/i)).not.toBeInTheDocument();
+  });
+
+  it("banners an exhausted allowance so a dismissed dialog isn't the only warning", async () => {
+    apiGet.mockImplementation((path) => {
+      if (path === "/auth/me") return Promise.resolve({
+        tier: "free", tier_name: "Free", jd_match_scans_per_month: 10,
+        jd_match_scans_used_this_month: 10, jd_match_scans_exhausted: true,
+        jd_match_scans_reset_at: "2099-10-01T00:00:00Z",
+      });
+      if (path === "/history") return Promise.resolve({ history: [] });
+      return Promise.reject(new Error("unexpected"));
+    });
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/out of scans for this month/i)).toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent(/Resets/);
+  });
+
   it("shows an empty-state message with no history yet", async () => {
     apiGet.mockImplementation((path) => {
       if (path === "/auth/me") return Promise.resolve({ tier: "pro", tier_name: "Pro", jd_match_scans_per_month: null, jd_match_scans_used_this_month: 0 });

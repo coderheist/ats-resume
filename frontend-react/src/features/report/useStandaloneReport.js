@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { apiPost } from "../../lib/api";
+import { scanLimitDetail } from "../../lib/usageLimit";
 
 /**
  * Two independent backend computations (readiness score vs. ranked
@@ -14,10 +15,14 @@ export function useStandaloneReport() {
   const [suggestionsError, setSuggestionsError] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
+  // See useFullReport: a spent monthly allowance is a dialog, not an
+  // inline error, so it needs its own piece of state.
+  const [limitDetail, setLimitDetail] = useState(null);
 
   const run = useCallback(async (resume) => {
     setStatus("loading");
     setError(null);
+    setLimitDetail(null);
     setSuggestions(null);
     setSuggestionsError(null);
 
@@ -27,6 +32,7 @@ export function useStandaloneReport() {
       setStatus("success");
     } catch (err) {
       setError(err.message);
+      setLimitDetail(scanLimitDetail(err));
       setStatus("error");
       return;
     }
@@ -39,13 +45,16 @@ export function useStandaloneReport() {
     }
   }, []);
 
+  const dismissLimit = useCallback(() => setLimitDetail(null), []);
+
   const reset = useCallback(() => {
     setData(null);
     setSuggestions(null);
     setSuggestionsError(null);
     setStatus("idle");
     setError(null);
+    setLimitDetail(null);
   }, []);
 
-  return { data, suggestions, suggestionsError, status, error, run, reset };
+  return { data, suggestions, suggestionsError, status, error, limitDetail, dismissLimit, run, reset };
 }

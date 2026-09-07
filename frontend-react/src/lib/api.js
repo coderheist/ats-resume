@@ -5,11 +5,41 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  /**
+   * `detail` carries FastAPI's error body when it was an object rather
+   * than a string -- currently the 429 from the scoring routes, which
+   * ships the usage numbers and the reset timestamp the limit dialog
+   * needs (see app/api/routes/scan.py's _enforce_entitlement). Callers
+   * that only want something to print keep using `.message`.
+   */
+  constructor(message, status, detail = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
+}
+
+/**
+ * Turn a non-OK response into an ApiError. Shared by every request
+ * helper below so they can't drift on how an error body is unwrapped:
+ * a `detail` string is the message as-is, a `detail` object keeps its
+ * `message` readable and hands the rest to the caller, and anything
+ * else falls back to the raw JSON (or statusText for non-JSON bodies).
+ */
+async function _toApiError(res) {
+  let detail = null;
+  let message = res.statusText;
+  try {
+    const data = await res.json();
+    detail = data.detail ?? null;
+    if (typeof detail === "string") message = detail;
+    else if (detail && typeof detail === "object" && typeof detail.message === "string") message = detail.message;
+    else message = JSON.stringify(detail ?? data);
+  } catch {
+    // response wasn't JSON -- keep statusText
+  }
+  return new ApiError(message, res.status, detail);
 }
 
 // A module-level "token getter" rather than threading auth through
@@ -45,16 +75,7 @@ export async function apiPost(path, body) {
     );
   }
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const data = await res.json();
-      detail = data.detail ? JSON.stringify(data.detail) : JSON.stringify(data);
-    } catch {
-      // response wasn't JSON -- keep statusText
-    }
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok) throw await _toApiError(res);
 
   return res.json();
 }
@@ -66,16 +87,7 @@ export async function apiGet(path) {
   } catch (networkErr) {
     throw new ApiError(`Couldn't reach the API at ${path}. (${networkErr.message})`, 0);
   }
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const data = await res.json();
-      detail = data.detail ? JSON.stringify(data.detail) : JSON.stringify(data);
-    } catch {
-      // not JSON -- keep statusText
-    }
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok) throw await _toApiError(res);
   return res.json();
 }
 
@@ -102,16 +114,7 @@ export async function apiPostFile(path, file, extraFields = {}) {
     throw new ApiError(`Couldn't reach the API at ${path}. Is the backend running? (${networkErr.message})`, 0);
   }
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const data = await res.json();
-      detail = data.detail ? JSON.stringify(data.detail) : JSON.stringify(data);
-    } catch {
-      // not JSON -- keep statusText
-    }
-    throw new ApiError(detail, res.status);
-  }
+  if (!res.ok) throw await _toApiError(res);
 
   return res.json();
 }

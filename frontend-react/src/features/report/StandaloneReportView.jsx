@@ -3,6 +3,7 @@ import { BulletList } from "../../components/BulletList";
 import { DimensionTile } from "../../components/DimensionTile";
 import { ErrorBox } from "../../components/ErrorBox";
 import { FadeUpSection } from "../../components/FadeUpSection";
+import { LimitReachedDialog } from "../../components/LimitReachedDialog";
 import { ParsingLoader } from "../../components/ParsingLoader";
 import { ReportHero } from "../../components/ReportHero";
 import { ReportSkeleton } from "../../components/ReportSkeleton";
@@ -19,7 +20,7 @@ const STEPS = ["Upload resume", "Run analysis", "Report"];
 
 export function StandaloneReportView() {
   const upload = useResumeUpload();
-  const { data, suggestions, suggestionsError, status, error, run, reset } = useStandaloneReport();
+  const { data, suggestions, suggestionsError, status, error, limitDetail, dismissLimit, run, reset } = useStandaloneReport();
 
   const resume = upload.result?.resume;
 
@@ -89,6 +90,7 @@ export function StandaloneReportView() {
       )}
 
       {status === "error" && <ErrorBox message={error} />}
+      {limitDetail && <LimitReachedDialog detail={limitDetail} onClose={dismissLimit} />}
       {status === "loading" && <ReportSkeleton tileCount={4} listRows={3} />}
 
       {status === "success" && data && (

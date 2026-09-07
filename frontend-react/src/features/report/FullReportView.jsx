@@ -7,6 +7,7 @@ import { DimensionTile } from "../../components/DimensionTile";
 import { ErrorBox } from "../../components/ErrorBox";
 import { FadeUpSection } from "../../components/FadeUpSection";
 import { KnockoutBanner } from "../../components/KnockoutBanner";
+import { LimitReachedDialog } from "../../components/LimitReachedDialog";
 import { ParsingLoader } from "../../components/ParsingLoader";
 import { ReportHero } from "../../components/ReportHero";
 import { RequirementRow } from "../../components/RequirementRow";
@@ -34,7 +35,7 @@ const DIMENSION_LABELS = {
 export function FullReportView() {
   const upload = useResumeUpload();
   const [jdText, setJdText] = useState("");
-  const { data, status, error, run, reset } = useFullReport();
+  const { data, status, error, limitDetail, dismissLimit, run, reset } = useFullReport();
   const [lastAnalyzedKey, setLastAnalyzedKey] = useState(null);
 
   const resume = upload.result?.resume;
@@ -108,6 +109,7 @@ export function FullReportView() {
       )}
 
       {status === "error" && <ErrorBox message={error} />}
+      {limitDetail && <LimitReachedDialog detail={limitDetail} onClose={dismissLimit} />}
       {status === "loading" && <ReportSkeleton tileCount={4} listRows={3} />}
 
       {status === "success" && data && (

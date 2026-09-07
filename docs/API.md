@@ -82,7 +82,25 @@ Errors use FastAPI's standard shape:
 | `503` | A required optional integration (Firebase, Razorpay) is not configured |
 
 Note that `429` covers two distinct conditions — read `detail` to distinguish a
-per-IP rate limit from an exhausted plan allowance.
+per-IP rate limit (a string) from an exhausted plan allowance (an object):
+
+```json
+{
+  "detail": {
+    "error": "scan_limit_reached",
+    "message": "You've used all 10 scans included in the Free plan this month. Your allowance resets on 01 October 2026 at 00:00 UTC.",
+    "used": 10,
+    "limit": 10,
+    "tier": "free",
+    "resets_at": "2026-10-01T00:00:00Z"
+  }
+}
+```
+
+`message` is a complete sentence, reset date included, for clients that only
+want something to display. `resets_at` is explicitly UTC so a UI can render it
+in the viewer's own timezone; the web client uses it to show a "you're out of
+scans, resets in N days" dialog.
 
 Parse endpoints deliberately do **not** return `5xx` for a difficult document.
 An unreadable or image-only file returns `200` with an empty resume and a
@@ -635,12 +653,20 @@ first call for a given Firebase uid — there is no separate registration endpoi
   "name": "Jordan Alvarez",
   "tier": "free",
   "tier_name": "Free",
-  "jd_match_scans_per_month": 3,
-  "jd_match_scans_used_this_month": 1
+  "jd_match_scans_per_month": 10,
+  "jd_match_scans_used_this_month": 1,
+  "jd_match_scans_reset_at": "2026-10-01T00:00:00Z",
+  "jd_match_scans_exhausted": false
 }
 ```
 
 `jd_match_scans_per_month: null` means unlimited.
+
+`jd_match_scans_reset_at` is midnight UTC on the 1st of next month — the instant
+the used-this-month counter returns to zero. It is always present, including on
+unlimited tiers, so a client rendering "resets on…" never has to special-case the
+tier. `jd_match_scans_exhausted` is a convenience flag: true only when the tier
+has a limit and the caller has reached it.
 
 **Status codes:** `401` no or invalid token · `503` Firebase not configured
 
@@ -691,7 +717,7 @@ Public. Pricing and entitlements, read straight from `app/config.py`.
       "name": "Free",
       "monthly_price_usd": 0,
       "annual_price_usd": null,
-      "jd_match_scans_per_month": 3,
+      "jd_match_scans_per_month": 10,
       "voice_minutes_per_month": 0,
       "features": ["basic_ats_readiness_score", "json_resume_export"]
     },
@@ -779,7 +805,7 @@ staying open; a closed tab must not mean a real payment goes unrecorded.
 | Issue | Impact | Location |
 | --- | --- | --- |
 | `provider_used` crash | `POST /resume/parse-text` and `/resume/parse-file` return `500` when no `tier` is passed *and* the confidence gate escalates to the LLM. Requires a configured LLM key to trigger. Workaround: pass an explicit `tier`. | [resume.py:144](../app/api/routes/resume.py#L144), [resume.py:161](../app/api/routes/resume.py#L161) |
-| `429` is overloaded | Rate limiting and exhausted plan allowance share a status code. Clients must read `detail` to tell them apart. | [scan.py:36](../app/api/routes/scan.py#L36), [rate_limit.py](../app/core/rate_limit.py) |
+| `429` is overloaded | Rate limiting and exhausted plan allowance share a status code. Clients must read `detail` to tell them apart — a string for the former, an object with `error: "scan_limit_reached"` for the latter. | [scan.py:36](../app/api/routes/scan.py#L36), [rate_limit.py](../app/core/rate_limit.py) |
 | Bias wordlist is fixed | Common coded terms outside the vocabulary are not detected. | [jd_bias_scanner.py:21](../app/core/bias_audit/jd_bias_scanner.py#L21) |
 
 ---

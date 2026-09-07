@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiPost, apiPostFile } from "../../lib/api";
 import { FullReportView } from "./FullReportView";
@@ -106,6 +107,28 @@ describe("FullReportView", () => {
     fireEvent.click(screen.getByText("Run full report"));
 
     await waitFor(() => expect(screen.getByText(/500 Internal Server Error/)).toBeInTheDocument());
+  });
+
+  it("pops the limit dialog with the reset date when the monthly allowance is spent", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockRejectedValue(Object.assign(new Error("You've used all 10 scans included in the Free plan this month."), {
+      status: 429,
+      detail: {
+        error: "scan_limit_reached", message: "You've used all 10 scans included in the Free plan this month.",
+        used: 10, limit: 10, resets_at: "2099-10-01T00:00:00Z",
+      },
+    }));
+
+    // MemoryRouter only because the dialog links to /pricing.
+    render(<MemoryRouter><FullReportView /></MemoryRouter>);
+    uploadResume();
+    await waitFor(() => screen.getByLabelText("Job description"));
+    fireEvent.change(screen.getByLabelText("Job description"), { target: { value: "Some JD text" } });
+    fireEvent.click(screen.getByText("Run full report"));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/all 10 scans/i);
+    expect(dialog).toHaveTextContent(/2099/);
   });
 
   it("Run full report is disabled until the JD field has text", async () => {

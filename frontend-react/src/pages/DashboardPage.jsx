@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { FileSearch, Gauge, History as HistoryIcon } from "lucide-react";
+import { AlertTriangle, FileSearch, Gauge, History as HistoryIcon } from "lucide-react";
 import { apiGet } from "../lib/api";
 import { useAuth } from "../lib/authContext";
+import { resetSentence } from "../lib/usageLimit";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -17,6 +18,8 @@ export function DashboardPage() {
   const usedPct = profile?.jd_match_scans_per_month
     ? Math.min(100, (profile.jd_match_scans_used_this_month / profile.jd_match_scans_per_month) * 100)
     : 0;
+  const exhausted = Boolean(profile?.jd_match_scans_exhausted);
+  const resets = resetSentence(profile?.jd_match_scans_reset_at);
 
   return (
     <div className="app-shell">
@@ -24,6 +27,22 @@ export function DashboardPage() {
         <h1>Welcome back{user?.displayName ? `, ${user.displayName.split(" ")[0]}` : ""}</h1>
         <p>Here's where things stand.</p>
       </header>
+
+      {/* Standing notice, not a one-shot toast: someone who hit the
+          limit mid-scan and dismissed the dialog still needs to be able
+          to come back here and find out when they get more scans. */}
+      {exhausted && (
+        <div className="usage-exhausted-banner" role="status">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>You're out of scans for this month.</strong>
+            {resets && <span>{resets}</span>}
+          </div>
+          <Link to="/pricing" className="btn-primary">
+            Upgrade
+          </Link>
+        </div>
+      )}
 
       <div className="dashboard-grid">
         <div className="dashboard-card">
@@ -39,6 +58,7 @@ export function DashboardPage() {
                   <p className="dashboard-usage-label">
                     {profile.jd_match_scans_used_this_month} of {profile.jd_match_scans_per_month} scans used this month
                   </p>
+                  {resets && <p className="dashboard-usage-reset">{resets}</p>}
                 </>
               ) : (
                 <p className="dashboard-usage-label">Unlimited scans</p>

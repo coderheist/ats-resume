@@ -11,7 +11,7 @@ from app.core.scoring.hybrid_score import score_resume_against_jd
 from app.core.scoring.readiness import score_standalone_readiness
 from app.core.scoring.screening_report import screen_resume_against_jd
 from app.core.scoring.suggestion_engine import top_suggestions
-from app.core.services.entitlement_service import check_scan_allowance, record_scan
+from app.core.services.entitlement_service import check_scan_allowance, iso_utc, record_scan
 from app.core.services.resume_store import save_resume, save_scan_result
 from app.core.services.user_service import get_or_create_user
 from app.db.models import User
@@ -31,9 +31,23 @@ def _resolve_user(db: Session, auth_user: AuthenticatedUser | None) -> User | No
 
 
 def _enforce_entitlement(db: Session, user: User | None) -> None:
+    """The 429 body is an object, not a bare string, because the UI has
+    to do more than print it: it pops a "you're out of scans" dialog that
+    names the exact reset moment in the viewer's timezone and links to
+    the upgrade page. `message` stays a complete human-readable sentence
+    so a plain API consumer that only reads `detail.message` still gets
+    the whole story, reset date included."""
     check = check_scan_allowance(db, user)
-    if not check.allowed:
-        raise HTTPException(status_code=429, detail=check.reason)
+    if check.allowed:
+        return
+    raise HTTPException(status_code=429, detail={
+        "error": "scan_limit_reached",
+        "message": check.reason,
+        "used": check.used,
+        "limit": check.limit,
+        "tier": check.tier,
+        "resets_at": iso_utc(check.resets_at) if check.resets_at else None,
+    })
 
 
 @router.post("/jd-match")

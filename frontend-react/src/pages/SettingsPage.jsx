@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { useAuth } from "../lib/authContext";
+import { resetSentence } from "../lib/usageLimit";
 
 /**
  * Deliberately minimal: account info and subscription status pulled
@@ -54,6 +55,12 @@ export function SettingsPage() {
               <div className="settings-row">
                 <span className="settings-label">Scans used this month</span>
                 <span>{profile.jd_match_scans_used_this_month} / {profile.jd_match_scans_per_month}</span>
+              </div>
+            )}
+            {resetSentence(profile.jd_match_scans_reset_at) && (
+              <div className="settings-row">
+                <span className="settings-label">Allowance resets</span>
+                <span>{resetSentence(profile.jd_match_scans_reset_at)}</span>
               </div>
             )}
             <Link to="/pricing" className="btn-outline" style={{ marginTop: 12, display: "inline-block", width: "auto" }}>

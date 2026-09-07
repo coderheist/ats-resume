@@ -852,3 +852,92 @@ body {
   line-height: 1.65;
   margin: 0;
 }
+
+/* ---- Monthly-allowance exhausted: dialog + standing banner ---- */
+.limit-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(27, 36, 48, 0.55);
+  animation: limit-dialog-fade 0.16s ease-out;
+}
+.limit-dialog {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 40px rgba(27, 36, 48, 0.22);
+  padding: 24px 24px 20px;
+  animation: limit-dialog-rise 0.18s ease-out;
+}
+.limit-dialog:focus { outline: none; }
+.limit-dialog h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  margin: 0 0 10px;
+  padding-right: 24px;
+  color: var(--ink);
+}
+.limit-dialog-body { font-size: 13.5px; color: var(--ink-soft); margin: 0 0 16px; line-height: 1.55; }
+.limit-dialog-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+  padding: 4px;
+  line-height: 0;
+  border-radius: var(--radius-sm);
+}
+.limit-dialog-close:hover { color: var(--ink); background: var(--paper); }
+.limit-dialog-reset {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent-ink);
+  margin-bottom: 18px;
+}
+.limit-dialog-reset svg { flex-shrink: 0; margin-top: 1px; }
+.limit-dialog-reset div { display: flex; flex-direction: column; gap: 2px; }
+.limit-dialog-reset strong { font-size: 13.5px; }
+.limit-dialog-reset span { font-family: var(--font-mono); font-size: 11.5px; }
+.limit-dialog-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.limit-dialog-actions .btn-primary { width: auto; text-decoration: none; display: inline-block; }
+
+@keyframes limit-dialog-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes limit-dialog-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+.usage-exhausted-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  background: var(--gap-bg);
+  border: 1px solid var(--gap-line);
+  border-radius: var(--radius-md);
+  color: var(--gap);
+  font-size: 13.5px;
+  flex-wrap: wrap;
+}
+.usage-exhausted-banner svg { flex-shrink: 0; }
+.usage-exhausted-banner div { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 200px; }
+.usage-exhausted-banner span { color: var(--ink-soft); font-size: 12.5px; }
+.usage-exhausted-banner .btn-primary { width: auto; text-decoration: none; }
+
+.dashboard-usage-reset { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-faint); margin: 4px 0 0; }

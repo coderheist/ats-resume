@@ -26,7 +26,7 @@ class Tier:
 B2C_TIERS: dict[str, Tier] = {
     "free": Tier(
         id="free", name="Free", monthly_price_usd=0, annual_price_usd=None,
-        jd_match_scans_per_month=3, voice_minutes_per_month=0,
+        jd_match_scans_per_month=10, voice_minutes_per_month=0,
         features=("basic_ats_readiness_score", "json_resume_export"),
     ),
     "starter": Tier(

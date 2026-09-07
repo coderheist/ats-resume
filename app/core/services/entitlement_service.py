@@ -26,6 +26,27 @@ def _month_start(now: datetime | None = None) -> datetime:
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
+def next_reset_at(now: datetime | None = None) -> datetime:
+    """When the current allowance period ends -- i.e. the exact instant
+    scans_used_this_month starts counting from zero again.
+
+    The allowance window is a calendar month (see _month_start), not a
+    rolling 30 days from signup, so this is simply midnight UTC on the
+    1st of next month. Returned rather than computed in the routes so
+    the "you're out of scans" message, /auth/me, and the 429 body can't
+    disagree about the date they show the user.
+    """
+    start = _month_start(now)
+    return start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
+
+
+def iso_utc(value: datetime) -> str:
+    """Naive-UTC datetime -> an explicitly-UTC ISO 8601 string, so the
+    browser renders the reset moment in the viewer's own timezone
+    instead of silently reading it as local time."""
+    return value.isoformat(timespec="seconds") + "Z"
+
+
 def record_scan(db: Session, user: User | None, action: str) -> None:
     """Record a scoring request. user=None for anonymous requests -- still
     logged for aggregate visibility, just never counted against any
@@ -62,6 +83,7 @@ class EntitlementCheck:
     limit: int | None  # None = unlimited
     tier: str
     reason: str | None = None
+    resets_at: datetime | None = None  # None only when the tier is unlimited
 
 
 def check_scan_allowance(db: Session, user: User | None) -> EntitlementCheck:
@@ -83,9 +105,14 @@ def check_scan_allowance(db: Session, user: User | None) -> EntitlementCheck:
     if tier.jd_match_scans_per_month is None:
         return EntitlementCheck(allowed=True, used=0, limit=None, tier=tier_id)
 
+    resets_at = next_reset_at()
     used = scans_used_this_month(db, user)
     allowed = used < tier.jd_match_scans_per_month
     reason = None if allowed else (
-        f"You've used all {tier.jd_match_scans_per_month} scans included in the {tier.name} plan this month."
+        f"You've used all {tier.jd_match_scans_per_month} scans included in the {tier.name} plan this month. "
+        f"Your allowance resets on {resets_at.strftime('%d %B %Y')} at 00:00 UTC."
     )
-    return EntitlementCheck(allowed=allowed, used=used, limit=tier.jd_match_scans_per_month, tier=tier_id, reason=reason)
+    return EntitlementCheck(
+        allowed=allowed, used=used, limit=tier.jd_match_scans_per_month,
+        tier=tier_id, reason=reason, resets_at=resets_at,
+    )

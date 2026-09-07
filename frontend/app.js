@@ -37,10 +37,7 @@ async function apiPost(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    const detail = data && data.detail ? JSON.stringify(data.detail) : res.statusText;
-    throw new Error(`${res.status} ${detail}`);
-  }
+  if (!res.ok) throw new Error(`${res.status} ${parseErrorMessage(res, data)}`);
   return data;
 }
 
@@ -161,6 +158,10 @@ function applyParsedResume(prefix, data) {
 function parseErrorMessage(res, data) {
   if (!data) return res.statusText;
   if (typeof data.detail === "string") return data.detail;
+  // Structured error bodies (the scoring routes' "monthly allowance
+  // spent" 429, see app/api/routes/scan.py) carry a ready-to-read
+  // sentence -- show that rather than dumping the raw JSON at the user.
+  if (data.detail && typeof data.detail.message === "string") return data.detail.message;
   if (data.detail) return JSON.stringify(data.detail);
   return res.statusText;
 }
