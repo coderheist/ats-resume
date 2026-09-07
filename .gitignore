@@ -19,6 +19,12 @@ node_modules/
 frontend-react/node_modules/
 frontend-react-dist/
 
+# Build output. frontend-react-dist/ (above) is where vite actually writes;
+# frontend-react/dist/ is the copy frontend-react/vercel.json makes so the
+# output sits inside Vercel's Root Directory -- see that file's comment in
+# docs/DEPLOY-FREE-TIER.md.
+frontend-react/dist/
+
 # Editors / OS
 .vscode/
 .idea/

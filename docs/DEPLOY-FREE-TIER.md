@@ -272,8 +272,21 @@ the repo rather than only in a dashboard nobody can diff:
 | Output directory | from `vercel.json` |
 
 Vercel reads `vercel.json` from the Root Directory, so that field must be
-blank for any of it to apply. It is the one part a file in the repository
-cannot set for you.
+blank for the root file to apply. Because that is a dashboard setting no
+file in the repository can guarantee, there is a **second**
+[`frontend-react/vercel.json`](../frontend-react/vercel.json) covering
+the other case: if the Root Directory is left as `frontend-react`, Vercel
+reads that one instead, and its build command copies the finished output
+from `../frontend-react-dist` into `frontend-react/dist` — inside the
+root, where the platform can see it.
+
+Two files for one deployment is redundancy, deliberately: the failure it
+prevents is a build that succeeds in full and then throws away its own
+output over a setting nobody remembered to change. The copy costs a few
+hundred kilobytes of duplicated build output that is never committed
+(both paths are in `.gitignore`). Whichever Root Directory the project
+ends up with, the deploy works; clearing it is still the tidier of the
+two, and the root file is the one to keep if you ever consolidate.
 
 The `rewrites` block maps the five client-only routes onto the SPA shell.
 They are listed explicitly rather than as a catch-all so a mistyped URL
