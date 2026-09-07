@@ -17,7 +17,7 @@ online for free, properly" path.
     - [2.2 Store the secrets](#22-store-the-secrets)
     - [2.3 Deploy](#23-deploy)
   - [Step 3 — Frontend (Cloudflare Pages)](#step-3--frontend-cloudflare-pages)
-    - [Deploying the frontend to Vercel instead](#deploying-the-frontend-to-vercel-instead)
+  - [Step 3b — The stack this project actually deploys to (Vercel + Render)](#step-3b--the-stack-this-project-actually-deploys-to-vercel--render)
   - [Step 4 — Connect the pieces](#step-4--connect-the-pieces)
   - [Step 5 — Verify](#step-5--verify)
   - [Keeping it free](#keeping-it-free)
@@ -236,24 +236,33 @@ deliberately not prerendered — they are `noindex` and render differently
 per user — so they have no file on disk and a direct hit or a refresh on
 one 404s unless the platform is told to serve the SPA shell for them.
 On Cloudflare that is a `_redirects` file; on Vercel it is the `rewrites`
-block described below.
+block in [`vercel.json`](../vercel.json).
 
-### Deploying the frontend to Vercel instead
+---
 
-Vercel works equally well, with one trap worth stating plainly: its
-**Root Directory** setting is also the ceiling for build output. Point it
-at `frontend-react` and the build succeeds but the deploy fails with
+## Step 3b — The stack this project actually deploys to (Vercel + Render)
+
+The sections above are the *recommended* free-tier stack. The live
+deployment uses **Vercel for the frontend and Render for the backend**,
+so this section records what that combination actually requires. The
+trade-off is stated plainly rather than hidden: Render's free tier sleeps
+after ~15 minutes idle and takes tens of seconds to wake, which is the
+cold start the table above rejected it for. Everything else about the
+app is unchanged — this is a hosting choice, not a code one.
+
+**Frontend on Vercel.** One trap dominates: Vercel's **Root Directory**
+setting is also the ceiling for build output. Point it at
+`frontend-react` and the build succeeds and then the deploy fails with
 
 ```
 Error: No Output Directory named "dist" found after the Build completed.
 ```
 
 because `vite.config.js` writes to `../frontend-react-dist`, one level
-*above* that root, where Vercel cannot see it.
-
-The repository root therefore carries a [`vercel.json`](../vercel.json)
-that pins the whole arrangement, so it is reproducible rather than a
-dashboard setting nobody can review:
+*above* that root, where Vercel cannot see it. The repository root
+therefore carries a [`vercel.json`](../vercel.json) pinning the install
+command, build command and output directory, so the arrangement lives in
+the repo rather than only in a dashboard nobody can diff:
 
 | Setting | Value |
 | --- | --- |
@@ -263,18 +272,39 @@ dashboard setting nobody can review:
 | Output directory | from `vercel.json` |
 
 Vercel reads `vercel.json` from the Root Directory, so that field must be
-blank for any of this to apply. Environment variables are the same
-build-time set as Cloudflare above — `VITE_SITE_URL` and
-`VITE_API_BASE_URL` especially, since without the latter the deployed
-frontend issues its API calls at its own origin and every request 404s
-against the static CDN instead of reaching Cloud Run.
+blank for any of it to apply. It is the one part a file in the repository
+cannot set for you.
 
-The `rewrites` entries map the five client-only routes onto the SPA
-shell. They are listed explicitly rather than as a catch-all so a
-mistyped URL still returns a real 404 instead of a soft 404 that renders
-an empty page with a 200 — a genuine SEO liability at scale. The cost is
-that **a new client-only route must be added to that list**, or it will
-404 on refresh in production while working perfectly in `npm run dev`.
+The `rewrites` block maps the five client-only routes onto the SPA shell.
+They are listed explicitly rather than as a catch-all so a mistyped URL
+still returns a real 404 instead of a soft 404 rendering an empty page
+with a 200. The cost is that **a new client-only route must be added to
+that list**, or it will 404 on refresh in production while working
+perfectly under `npm run dev`.
+
+Build-time environment variables are the same set listed for Cloudflare
+above, with `VITE_API_BASE_URL` pointing at the Render service
+(`https://<service>.onrender.com`). Without it the deployed frontend
+issues its API calls at its own origin, where they 404 against Vercel's
+static CDN and never reach the backend at all.
+
+**Backend on Render.** Create a Web Service from the repository with
+runtime **Docker** — it builds the root [`Dockerfile`](../Dockerfile),
+which already binds `${PORT:-8000}` as Render requires. Set the same
+secrets Step 2.2 lists (`DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_JSON`,
+the LLM key) as Render environment variables, and add one more that is
+easy to forget and fails silently in a browser:
+
+```
+CORS_ALLOWED_ORIGINS = https://<your-project>.vercel.app
+```
+
+The default allowlist in [`app/main.py`](../app/main.py) is localhost
+only, so without this every request from the deployed frontend is
+blocked by the browser — and blocked *before* your code runs, so the
+Render logs show nothing at all. Include the custom domain too if you add
+one; preview deployments get their own origins and are not covered by the
+production entry.
 
 ---
 
