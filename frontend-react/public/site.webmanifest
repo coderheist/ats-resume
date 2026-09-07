@@ -1,0 +1,17 @@
+{
+  "name": "Resume Optimizer — ATS Resume Checker",
+  "short_name": "Resume Optimizer",
+  "description": "Check how your resume scores against any job description. Evidence-based ATS analysis showing missing keywords, skill gaps, and what to fix.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4ead7",
+  "theme_color": "#1f4d45",
+  "orientation": "portrait-primary",
+  "categories": ["productivity", "business", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -6,7 +6,11 @@
   "description": "React report screens for the resume-optimizer backend (Full Report / Standalone Report), built alongside the existing static frontend/ console rather than replacing it -- see README.md.",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:client && npm run build:ssr && npm run prerender",
+    "build:client": "vite build",
+    "build:ssr": "vite build --ssr src/entry-server.jsx --outDir .prerender-ssr --emptyOutDir",
+    "prerender": "node scripts/prerender.mjs",
+    "build:spa": "vite build",
     "preview": "vite preview",
     "test": "vitest run"
   },

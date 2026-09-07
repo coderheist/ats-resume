@@ -7,11 +7,45 @@ import { defineConfig } from "vite";
 // FastAPI: that keeps the backend API-only, consistent with how
 // frontend/ already works (see app/main.py's CORS comment) rather than
 // introducing a second, different serving convention for this one.
-export default defineConfig({
+// The config is a function so the SSR build (npm run build:ssr, used by
+// scripts/prerender.mjs) can opt out of manualChunks. In an SSR build
+// every dependency is external by design, and rollup rejects a
+// manualChunks entry naming an external module outright:
+//   "react" cannot be included in manualChunks because it is resolved as
+//   an external module
+// Chunk splitting is a browser-delivery concern and means nothing for a
+// bundle that Node imports once at build time, so it simply doesn't apply
+// there.
+export default defineConfig(({ isSsrBuild }) => ({
   plugins: [react()],
   build: {
     outDir: "../frontend-react-dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: isSsrBuild
+        ? {}
+        : {
+            // Split the big third-party deps into their own chunks. These
+            // are still fetched on first load (they're statically
+            // imported), but browsers fetch them in parallel and each
+            // caches independently, so a deploy that only changes app
+            // code no longer invalidates ~450 kB of unchanged vendor JS
+            // for returning visitors.
+            //
+            // Firebase is the largest single dependency and is only
+            // needed once someone signs in. Moving it off the critical
+            // path entirely needs firebase.js to switch to a dynamic
+            // import, which changes getFirebaseAuth() from sync to async
+            // and ripples through authContext -- worth doing, but a
+            // behavioural change rather than a build-config one. See
+            // docs/SEO.md.
+            manualChunks: {
+              "vendor-react": ["react", "react-dom", "react-router-dom"],
+              "vendor-firebase": ["firebase/app", "firebase/auth"],
+              "vendor-motion": ["framer-motion"],
+            },
+          },
+    },
   },
   preview: {
     port: 5175,
@@ -38,4 +72,4 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test-setup.js"],
   },
-});
+}));

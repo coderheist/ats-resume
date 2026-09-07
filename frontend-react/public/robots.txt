@@ -1,0 +1,20 @@
+# Baseline robots.txt.
+#
+# scripts/prerender.mjs rewrites this file in the build output with the
+# real Sitemap URL derived from VITE_SITE_URL. This copy is what gets
+# served if the app is built with plain `vite build` and no prerender
+# step, so it is deliberately safe on its own.
+
+User-agent: *
+Allow: /
+
+# Authenticated surfaces and auth pages. These have no public content:
+# indexing them wastes crawl budget and can surface a thin sign-in page
+# above the tool pages people are actually searching for.
+Disallow: /login
+Disallow: /signup
+Disallow: /dashboard
+Disallow: /history
+Disallow: /settings
+
+Sitemap: https://resume-optimizer.example.com/sitemap.xml

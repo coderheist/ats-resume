@@ -13,7 +13,9 @@ venv/
 dev.db
 *.sqlite3
 
-# React app (frontend-react/)
+# Node dependencies -- unqualified so a package.json added at any
+# level (not just frontend-react/) can never drag node_modules into a commit.
+node_modules/
 frontend-react/node_modules/
 frontend-react-dist/
 
@@ -24,3 +26,6 @@ frontend-react-dist/
 
 # Docker
 *.log
+
+# Prerender SSR bundle (build intermediate, see frontend-react/scripts/prerender.mjs)
+frontend-react/.prerender-ssr/

@@ -1,14 +1,33 @@
+import { Suspense, lazy } from "react";
 import { Link, Outlet, Route, Routes } from "react-router-dom";
 import { Navbar } from "./components/Navbar";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { SeoContent } from "./components/SeoContent";
+import { useSeo } from "./lib/useSeo";
 import { Hero } from "./pages/Hero";
-import { AuthPage } from "./pages/AuthPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { HistoryPage } from "./pages/HistoryPage";
 import { PricingPage } from "./pages/PricingPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { FullReportView } from "./features/report/FullReportView";
 import { StandaloneReportView } from "./features/report/StandaloneReportView";
+
+/**
+ * Code-split the routes a first-time visitor never lands on.
+ *
+ * Every route below is marked noindex in lib/seo.js -- they are
+ * authenticated surfaces and the auth pages themselves. Nobody arrives on
+ * one from a search result, so their JavaScript has no business being in
+ * the bundle that blocks the landing page's first render. Largest
+ * Contentful Paint is a ranking signal, and this is the cheapest real
+ * reduction available without restructuring how Firebase is loaded.
+ *
+ * The public routes (Hero, the two report views, Pricing) stay eagerly
+ * imported on purpose: those are the pages people land on, and making
+ * them wait on a second network round trip to become interactive would
+ * trade a real usability cost for a smaller headline bundle number.
+ */
+const AuthPage = lazy(() => import("./pages/AuthPage").then((m) => ({ default: m.AuthPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const HistoryPage = lazy(() => import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 
 function Layout() {
   return (
@@ -24,7 +43,7 @@ function Layout() {
   );
 }
 
-function ReportPage({ title, children }) {
+function ReportPage({ title, path, children }) {
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -34,19 +53,31 @@ function ReportPage({ title, children }) {
         <h1>{title}</h1>
       </header>
       {children}
+      {/* Rendered after the tool so it never pushes the actual interface
+          below the fold. Both routes are otherwise almost pure UI, which
+          prerendered to ~280 characters of text -- see SeoContent's
+          docstring. */}
+      <SeoContent path={path} />
     </div>
   );
 }
 
 export function App() {
+  // One call at the root rather than per page: seo.js's PAGE_SEO already
+  // maps every route, so a new route can't ship having forgotten it, and
+  // the title/description actually change on client-side navigation
+  // instead of every route inheriting index.html's defaults.
+  useSeo();
+
   return (
+    <Suspense fallback={<div className="route-loading" role="status" aria-live="polite">Loading…</div>}>
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Hero />} />
         <Route
           path="/with-jd"
           element={
-            <ReportPage title="Score against a job description">
+            <ReportPage title="Score against a job description" path="/with-jd">
               <FullReportView />
             </ReportPage>
           }
@@ -54,7 +85,7 @@ export function App() {
         <Route
           path="/without-jd"
           element={
-            <ReportPage title="General ATS readiness">
+            <ReportPage title="General ATS readiness" path="/without-jd">
               <StandaloneReportView />
             </ReportPage>
           }
@@ -92,5 +123,6 @@ export function App() {
       <Route path="/login" element={<AuthPage mode="signin" />} />
       <Route path="/signup" element={<AuthPage mode="signup" />} />
     </Routes>
+    </Suspense>
   );
 }

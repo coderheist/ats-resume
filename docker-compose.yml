@@ -1,7 +1,9 @@
 services:
   # Local Postgres+pgvector for development/testing convenience --
-  # verified directly (migrations applied, full 307-test suite passing
-  # against this exact image's engine locally). For a real deployment,
+  # migrations were applied and verified directly against this exact
+  # image's engine. Note that running pytest does NOT exercise this
+  # engine: the DB-touching tests override get_db with an in-memory
+  # SQLite session per test for isolation. For a real deployment,
   # point DATABASE_URL (below) at a hosted Postgres instead -- this repo
   # is set up for Supabase specifically (see .env.example's Database
   # section for connection-string/pooler-mode/pgvector-extension setup),

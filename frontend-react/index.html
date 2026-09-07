@@ -3,10 +3,68 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Resume Optimizer — Report</title>
+
+  <!-- Primary meta. These are the defaults baked into every route's HTML;
+       scripts/prerender.mjs overwrites them per route at build time, and
+       src/lib/useSeo.js updates them again on client-side navigation. -->
+  <title>Resume Optimizer — Free ATS Resume Checker &amp; Job Match Score</title>
+  <meta name="description" content="Check how your resume scores against any job description. Get an evidence-based ATS match report showing missing keywords, skill gaps, and exactly what to fix. Free, no signup required." />
+  <meta name="robots" content="index, follow, max-image-preview:large" />
+  <meta name="author" content="Resume Optimizer" />
+  <link rel="canonical" href="https://resume-optimizer.example.com/" />
+
+  <!-- Open Graph. Facebook, LinkedIn and Slack do not execute JavaScript,
+       so these have to exist in the served HTML to produce a link preview
+       at all -- a tag added after React mounts is never seen by them. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Resume Optimizer" />
+  <meta property="og:title" content="Resume Optimizer — Free ATS Resume Checker &amp; Job Match Score" />
+  <meta property="og:description" content="Check how your resume scores against any job description. Get an evidence-based ATS match report showing missing keywords, skill gaps, and exactly what to fix." />
+  <meta property="og:url" content="https://resume-optimizer.example.com/" />
+  <meta property="og:image" content="https://resume-optimizer.example.com/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Resume Optimizer report showing an 82 out of 100 job match score with a per-dimension breakdown." />
+  <meta property="og:locale" content="en_US" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Resume Optimizer — Free ATS Resume Checker &amp; Job Match Score" />
+  <meta name="twitter:description" content="Check how your resume scores against any job description. See missing keywords, skill gaps, and exactly what to fix." />
+  <meta name="twitter:image" content="https://resume-optimizer.example.com/og-image.png" />
+
+  <meta name="theme-color" content="#1f4d45" />
+  <link rel="manifest" href="/site.webmanifest" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231f4d45'/%3E%3Cpath d='M18 14h28v36H18z' fill='none' stroke='%23f4ead7' stroke-width='5'/%3E%3Cpath d='M26 25h12M26 34h12M26 43h8' stroke='%23f4ead7' stroke-width='4'/%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+
+  <!-- preconnect for the stylesheet host, and crossorigin preconnect for
+       the font files themselves -- gstatic serves the actual woff2, and
+       without its own hint the connection is only opened once the CSS has
+       already parsed. Both matter for LCP, which is a ranking signal. -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Structured data. Injected here as static markup rather than at
+       runtime because Google's rich-results extraction is markedly more
+       reliable against the initial HTML response. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Resume Optimizer",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Any (web-based)",
+    "url": "https://resume-optimizer.example.com",
+    "description": "Check how your resume scores against any job description. Evidence-based ATS analysis showing missing keywords, skill gaps, and what to fix.",
+    "offers": [
+      { "@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD" },
+      { "@type": "Offer", "name": "Starter", "price": "15", "priceCurrency": "USD" },
+      { "@type": "Offer", "name": "Pro", "price": "29", "priceCurrency": "USD" },
+      { "@type": "Offer", "name": "Pro+", "price": "45", "priceCurrency": "USD" }
+    ]
+  }
+  </script>
 </head>
 <body>
   <div id="root"></div>

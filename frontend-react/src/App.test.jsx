@@ -38,14 +38,18 @@ describe("App routing", () => {
     expect(screen.getByRole("link", { name: /check general ats readiness/i })).toHaveAttribute("href", "/without-jd");
   });
 
-  it("renders the login page at /login", () => {
+  // AuthPage is code-split (React.lazy in App.jsx -- /login and /signup are
+  // noindex routes nobody lands on first, so their JS is kept out of the
+  // bundle that blocks the landing page's first paint). These two therefore
+  // have to await the chunk resolving instead of asserting synchronously.
+  it("renders the login page at /login", async () => {
     renderAt("/login");
-    expect(screen.getByText("Sign in to your account")).toBeInTheDocument();
+    expect(await screen.findByText("Sign in to your account")).toBeInTheDocument();
   });
 
-  it("renders the signup page at /signup", () => {
+  it("renders the signup page at /signup", async () => {
     renderAt("/signup");
-    expect(screen.getByText("Create an account")).toBeInTheDocument();
+    expect(await screen.findByText("Create an account")).toBeInTheDocument();
   });
 
   it("shows the navbar on the hero and report pages, but not on auth pages", () => {
