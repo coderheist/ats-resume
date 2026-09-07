@@ -1,0 +1,29 @@
+{
+  "name": "resume-optimizer-report",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "React report screens for the resume-optimizer backend (Full Report / Standalone Report), built alongside the existing static frontend/ console rather than replacing it -- see README.md.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "framer-motion": "^11.11.17",
+    "lucide-react": "^0.462.0",
+    "firebase": "^11.0.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8",
+    "@testing-library/react": "^16.0.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "jsdom": "^25.0.1"
+  }
+}

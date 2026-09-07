@@ -1,0 +1,45 @@
+/* Ported 1:1 from frontend/styles.css's :root block -- not re-derived.
+   Both frontends share one palette; if either changes these values they
+   drift apart, so treat frontend/styles.css as the source of truth and
+   copy forward, don't edit here first. */
+:root {
+  --paper: #f6f5f1;
+  --paper-raised: #ffffff;
+  --ink: #1b2430;
+  --ink-soft: #5b6472;
+  --ink-faint: #8a8f98;
+  --rule: #d8d5cc;
+  --rule-strong: #b8b4a8;
+
+  --accent: #e4a11b;
+  --accent-ink: #7a5711;
+  --accent-bg: #fbefd4;
+
+  --match: #3f6e52;
+  --match-bg: #e4eee7;
+  --match-line: #b9d2c1;
+
+  --gap: #b23a2e;
+  --gap-bg: #f5e3e0;
+  --gap-line: #e2bab2;
+
+  --skeleton-base: #e7e4dc;
+  --skeleton-shimmer: #f3f1ea;
+
+  --font-display: "IBM Plex Serif", Georgia, serif;
+  --font-body: "IBM Plex Sans", -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --shadow-card: 0 1px 2px rgba(27, 36, 48, 0.06), 0 1px 0 rgba(27, 36, 48, 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
