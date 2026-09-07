@@ -27,4 +27,17 @@ COPY alembic.ini .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Bind to $PORT when the platform provides one, else 8000.
+#
+# This is not optional on managed hosts: Cloud Run, Railway, Koyeb and
+# Render all assign a port at runtime and inject it as $PORT (Cloud Run
+# defaults to 8080). A container that hard-codes 8000 never answers on the
+# port the platform probes, so the deploy fails its health check with a
+# generic "container failed to start and listen" error that gives no hint
+# about the real cause.
+#
+# Shell form (not exec form) is required so $PORT is actually expanded --
+# in exec form the string "$PORT" is passed to uvicorn literally.
+# docker-compose keeps working unchanged: it sets no PORT, so this falls
+# back to 8000, which is what its port mapping already expects.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
