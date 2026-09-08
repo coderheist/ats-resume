@@ -33,12 +33,17 @@
     // authenticated or render per-user -- so no file exists on disk for
     // them and a direct hit or refresh would 404 without this.
     //
-    // Note this is a catch-all: any unmatched path returns index.html
-    // with a 200, so a genuinely mistyped URL renders the SPA shell
-    // instead of a real 404. public/_redirects lists the five routes
-    // explicitly to keep that stricter behaviour where the platform
-    // honours it; this setting is the backstop that does not depend on
-    // whether it does.
+    // This is a catch-all: any unmatched path returns index.html with a
+    // 200, so a genuinely mistyped URL renders the SPA shell rather than
+    // a real 404. That is a worse trade than Pages/Vercel make, and it
+    // is accepted deliberately, because the stricter alternative does
+    // not work here. A Pages-style public/_redirects file listing the
+    // five routes as `200` rewrites was tried and actively broke them:
+    // Workers Assets honoured the file but treated each rule as a
+    // redirect to /index.html rather than a rewrite, and then normalised
+    // /index.html to /, so hitting /login answered 307 -> / and bounced
+    // the visitor to the landing page instead of the sign-in form.
+    // Verified against the live deployment, then removed.
     "not_found_handling": "single-page-application"
   }
 }
