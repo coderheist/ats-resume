@@ -113,12 +113,39 @@ Unset means `/payments/*` returns `503`.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:5500,http://127.0.0.1:5500,http://localhost:5174,http://localhost:5175` | Comma-separated allowed origins |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5500,http://127.0.0.1:5500,http://localhost:5174,http://localhost:5175` | Comma-separated allowed origins (exact match; surrounding spaces are stripped) |
+| `CORS_ALLOWED_ORIGIN_REGEX` | unset | Pattern for origins that change per build, e.g. Vercel preview deployments |
 | `RATE_LIMIT_REQUESTS` | `60` | Requests per window per IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Window length |
 
 Do not set `CORS_ALLOWED_ORIGINS` to `*` in production. The API accepts
 credentials-bearing `Authorization` headers.
+
+`CORS_ALLOWED_ORIGIN_REGEX` exists for one specific situation: a host that
+mints a new origin on every deploy, which an exact allowlist can never
+keep up with. Vercel is the usual case — a project has a stable
+production alias (`<project>-<team>.vercel.app`) plus a per-deployment
+URL (`<project>-<hash>-<team>.vercel.app`) whose hash changes on every
+push.
+
+```
+CORS_ALLOWED_ORIGINS      = https://myproject-myteam.vercel.app
+CORS_ALLOWED_ORIGIN_REGEX = https://myproject-[a-z0-9]+-myteam\.vercel\.app
+```
+
+The two are OR'd, so keep the production origin in the exact list — it
+should still work if the pattern is ever removed. Starlette matches the
+pattern against the whole `Origin` header with `re.fullmatch`, so include
+the scheme, omit any trailing slash, and **escape every literal dot**: an
+unescaped `.` is the regex "any character", and
+`https://myproject-.+-myteam.vercel.app` also matches a hostname an
+attacker can register. Prefer a specific character class (`[a-z0-9]+`)
+over `.+` for the same reason.
+
+This covers the API only. Firebase's Authorized domains list accepts no
+wildcards, so Google sign-in still works only on hostnames listed there
+individually — preview deployments can call the backend but cannot
+complete a Google sign-in.
 
 ---
 

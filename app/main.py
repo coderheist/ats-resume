@@ -41,11 +41,67 @@ app.add_middleware(RateLimitMiddleware)
 # directly and does. CORS_ALLOWED_ORIGINS defaults to all of these; override
 # with a comma-separated list in production rather than opening this to "*".
 _default_origins = "http://localhost:5500,http://127.0.0.1:5500,http://localhost:5174,http://localhost:5175"
-_allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", _default_origins).split(",")
+
+
+def _parse_origins(raw: str | None) -> list[str]:
+    """Split the comma-separated env var into an exact-match allowlist.
+
+    The strip() is not cosmetic. An origin is compared to the request's
+    `Origin` header by exact string equality, so a value pasted with the
+    spaces people naturally type -- "https://a.com, https://b.com" --
+    silently fails to match the second origin, and the failure surfaces
+    only as a blocked request in a browser with nothing in the server
+    logs. Empty entries (a trailing comma) are dropped for the same
+    reason: "" can never match an Origin header, so keeping it would only
+    make the configured list misleading to read.
+    """
+    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+
+
+def _parse_origin_regex(raw: str | None) -> str | None:
+    """CORS_ALLOWED_ORIGIN_REGEX, or None when unset/blank.
+
+    Starlette treats `allow_origin_regex=None` as "no pattern matching",
+    which is the intended default -- an empty string would instead be a
+    pattern that matches every origin by prefix, i.e. an accidental `*`.
+    """
+    return (raw or "").strip() or None
+
+
+_allowed_origins = _parse_origins(os.environ.get("CORS_ALLOWED_ORIGINS", _default_origins))
+
+# Exact origins alone cannot cover a platform that mints a new hostname
+# per build. Vercel gives a project a stable production alias
+# (`<project>-<team>.vercel.app`) *and* a throwaway per-deployment URL
+# (`<project>-<hash>-<team>.vercel.app`) whose hash changes on every
+# push -- so an allowlist pinned to one deployment's URL is stale as soon
+# as the next commit lands, and pinning every preview is impossible.
+# CORS_ALLOWED_ORIGIN_REGEX matches those by pattern instead, e.g.
+#
+#   CORS_ALLOWED_ORIGIN_REGEX=https://myproject-[a-z0-9]+-myteam\.vercel\.app
+#
+# Starlette compares with re.fullmatch (see its middleware/cors.py), so
+# the pattern must describe the WHOLE Origin header -- scheme included,
+# no trailing slash, and a trailing `$` is redundant rather than
+# required. The mistake that actually bites is an unescaped `.`, which
+# is the regex "any character": `https://myproject-.+-myteam.vercel.app`
+# also matches `https://myproject-x-myteamXvercelYapp`, an origin an
+# attacker can register. Escape every literal dot, as above.
+#
+# Firebase is the one thing this cannot paper over: its Authorized
+# domains list takes no wildcards, so Google sign-in still only works on
+# a hostname listed there by hand. Preview deployments can reach the API
+# with this pattern set, but cannot complete a Google sign-in.
+#
+# Keep the production origin in CORS_ALLOWED_ORIGINS regardless: the two
+# are OR'd, and the exact list is the one that should still work if this
+# pattern is ever removed.
+_allowed_origin_regex = _parse_origin_regex(os.environ.get("CORS_ALLOWED_ORIGIN_REGEX"))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_allowed_origin_regex,
     allow_methods=["GET", "POST"],
     # "Authorization" is required now that Firebase Auth is wired up
     # (app/core/auth/) -- the frontend sends `Authorization: Bearer
