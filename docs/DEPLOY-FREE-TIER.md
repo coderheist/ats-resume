@@ -17,7 +17,7 @@ online for free, properly" path.
     - [2.2 Store the secrets](#22-store-the-secrets)
     - [2.3 Deploy](#23-deploy)
   - [Step 3 — Frontend (Cloudflare Pages)](#step-3--frontend-cloudflare-pages)
-  - [Step 3b — The stack this project actually deploys to (Vercel + Render)](#step-3b--the-stack-this-project-actually-deploys-to-vercel--render)
+  - [Step 3b — The stack this project actually deploys to (Cloudflare Pages + Render)](#step-3b--the-stack-this-project-actually-deploys-to-cloudflare-pages--render)
   - [Step 4 — Connect the pieces](#step-4--connect-the-pieces)
   - [Step 5 — Verify](#step-5--verify)
   - [Keeping it free](#keeping-it-free)
@@ -235,20 +235,99 @@ routes (`/dashboard`, `/settings`, `/history`, `/login`, `/signup`) are
 deliberately not prerendered — they are `noindex` and render differently
 per user — so they have no file on disk and a direct hit or a refresh on
 one 404s unless the platform is told to serve the SPA shell for them.
-On Cloudflare that is a `_redirects` file; on Vercel it is the `rewrites`
-block in [`vercel.json`](../vercel.json).
+That file is committed:
+[`frontend-react/public/_redirects`](../frontend-react/public/_redirects).
+Vite copies `public/` verbatim into the build output, so it ships to
+`frontend-react-dist/_redirects` where Pages looks for it — no build
+step or dashboard setting involved. The equivalent for Vercel is the
+`rewrites` block in [`vercel.json`](../vercel.json); the two lists
+mirror each other and a new client-only route has to be added to both.
 
 ---
 
-## Step 3b — The stack this project actually deploys to (Vercel + Render)
+## Step 3b — The stack this project actually deploys to (Cloudflare Pages + Render)
 
-The sections above are the *recommended* free-tier stack. The live
-deployment uses **Vercel for the frontend and Render for the backend**,
-so this section records what that combination actually requires. The
-trade-off is stated plainly rather than hidden: Render's free tier sleeps
-after ~15 minutes idle and takes tens of seconds to wake, which is the
-cold start the table above rejected it for. Everything else about the
-app is unchanged — this is a hosting choice, not a code one.
+The live deployment is **Cloudflare Pages for the frontend** (Step 3
+above, which is also the recommendation) and **Render for the backend**
+in place of Cloud Run. The trade-off is stated plainly rather than
+hidden: Render's free tier sleeps after ~15 minutes idle and takes tens
+of seconds to wake, which is the cold start the table above rejected it
+for. Everything else about the app is unchanged — this is a hosting
+choice, not a code one.
+
+The frontend was previously on Vercel and was moved after two
+platform-specific problems, both recorded under "Previously on Vercel"
+below since the project's `vercel.json` files are still in the tree.
+
+**Origins on Cloudflare Pages.** Pages gives a project one stable
+production hostname and a fresh one per preview build:
+
+| URL shape | Changes per deploy? | Use it for |
+| --- | --- | --- |
+| `<project>.pages.dev` | No — always the current production deployment | CORS, Firebase authorized domains, sharing |
+| `<hash>.<project>.pages.dev` | **Yes** — new hash every push | Inspecting one specific build |
+| `<branch>.<project>.pages.dev` | No, per branch | Testing a long-lived branch |
+
+Pin the **production** hostname in Render's `CORS_ALLOWED_ORIGINS` and in
+Firebase's Authorized domains. Pinning a per-deployment hostname is the
+reason a deploy that worked yesterday fails CORS today: the allowlist
+names a build that is no longer being served.
+
+If previews also need to reach the API, add a pattern instead of chasing
+hashes — see `CORS_ALLOWED_ORIGIN_REGEX` in
+[CONFIGURATION.md](CONFIGURATION.md#http):
+
+```
+CORS_ALLOWED_ORIGINS      = https://myproject.pages.dev
+CORS_ALLOWED_ORIGIN_REGEX = https://[a-z0-9-]+\.myproject\.pages\.dev
+```
+
+Escape the literal dots. An unescaped `.` is the regex "any character",
+which widens the pattern to hostnames someone else can register. This
+gets previews past CORS only: Firebase's Authorized domains list takes no
+wildcards, so Google sign-in stays production-hostname-only.
+
+Unlike Vercel, Pages does not put a login wall in front of new projects —
+a deployment is publicly reachable as soon as it builds. Access control
+is opt-in, under the project's **Settings → Access policy** (Cloudflare
+Access), and is off unless you turn it on.
+
+**Backend on Render.** Create a Web Service from the repository with
+runtime **Docker** — it builds the root [`Dockerfile`](../Dockerfile),
+which already binds `${PORT:-8000}` as Render requires. Set the secrets
+Step 2.2 lists (`DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and
+whichever LLM keys you use) as Render environment variables.
+`ANTHROPIC_API_KEY`, `GEMINI_API_KEY` and `GROQ_API_KEY` are read
+independently and can all be set at once — see
+[CONFIGURATION.md](CONFIGURATION.md). If you set a Gemini or Groq key but
+no Anthropic one, also set `LLM_PROVIDER=gemini` (or `groq`): it defaults
+to `claude` in [`app/core/llm/router.py`](../app/core/llm/router.py), so
+any call that does not pass an explicit tier would otherwise reach for a
+provider you have no key for.
+
+All of these belong on the backend only. The frontend host builds static
+files and has no server to read them, so a non-`VITE_` variable set there
+is silently ignored, and a `VITE_`-prefixed one is compiled into public
+JavaScript where anyone can read the key.
+
+Then add one more that is easy to forget and fails silently in a browser:
+
+```
+CORS_ALLOWED_ORIGINS = https://<your-project>.pages.dev
+```
+
+The default allowlist in [`app/main.py`](../app/main.py) is localhost
+only, so without this every request from the deployed frontend is
+blocked by the browser — and blocked *before* your code runs, so the
+Render logs show nothing at all. Use the stable production hostname from
+the origin table above, and include your custom domain too if you add
+one.
+
+### Previously on Vercel
+
+Retained because both `vercel.json` files are still in the repository and
+the Vercel project may still exist. Skip this unless you are deploying
+there.
 
 **Frontend on Vercel.** One trap dominates: Vercel's **Root Directory**
 setting is also the ceiling for build output. Point it at
@@ -301,23 +380,47 @@ above, with `VITE_API_BASE_URL` pointing at the Render service
 issues its API calls at its own origin, where they 404 against Vercel's
 static CDN and never reach the backend at all.
 
-**Backend on Render.** Create a Web Service from the repository with
-runtime **Docker** — it builds the root [`Dockerfile`](../Dockerfile),
-which already binds `${PORT:-8000}` as Render requires. Set the same
-secrets Step 2.2 lists (`DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_JSON`,
-the LLM key) as Render environment variables, and add one more that is
-easy to forget and fails silently in a browser:
+The four `VITE_FIREBASE_*` values are equally load-bearing and fail more
+quietly. `frontend-react/.env` is git-ignored (correctly — it holds the
+real project's values), so a Git-based Vercel build never sees it and
+`import.meta.env.VITE_FIREBASE_*` comes out `undefined`. That makes
+`isFirebaseConfigured()` in
+[`src/lib/firebase.js`](../frontend-react/src/lib/firebase.js) return
+false, and the deployed app renders a `PREVIEW — no Firebase project
+configured in this deployment` badge on `/login` while every sign-in and
+sign-up attempt is refused before it reaches Firebase. Nothing errors;
+the buttons simply never do anything. Set all four in Vercel → Settings →
+Environment Variables **for the Production environment**, then redeploy —
+they are compiled into the bundle at build time, so changing them without
+a rebuild changes nothing.
+
+**Deployment Protection is on by default, and it locks out your users.**
+A fresh Vercel project enables Vercel Authentication, which 307-redirects
+every request to `vercel.com/sso-api?url=...`. Signed in to Vercel in
+your own browser it looks like the site works, which is what makes it
+confusing — but the first symptom in the console is a CORS error on a
+subresource, because `<link rel="manifest">` is fetched with CORS and the
+SSO redirect carries no `Access-Control-Allow-Origin`:
 
 ```
-CORS_ALLOWED_ORIGINS = https://<your-project>.vercel.app
+Access to manifest at 'https://vercel.com/sso-api?url=...%2Fsite.webmanifest'
+(redirected from 'https://<deployment>.vercel.app/site.webmanifest')
+has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header
+is present on the requested resource.
 ```
 
-The default allowlist in [`app/main.py`](../app/main.py) is localhost
-only, so without this every request from the deployed frontend is
-blocked by the browser — and blocked *before* your code runs, so the
-Render logs show nothing at all. Include the custom domain too if you add
-one; preview deployments get their own origins and are not covered by the
-production entry.
+The manifest is not the problem — it is the only request whose failure is
+visible. To anyone without access to the Vercel team, the whole site is a
+login wall. Turn it off at Vercel → Project → Settings → **Deployment
+Protection** → Vercel Authentication → *Disabled* (or *Only Preview
+Deployments*, which leaves production public and keeps previews private).
+
+Test on the **production** domain (`https://<project>.vercel.app`), not
+the per-deployment URL (`https://<project>-<hash>-<team>.vercel.app`).
+Deployment-scoped URLs stay protected under the *Only Preview
+Deployments* setting, and each one is a distinct origin that Firebase's
+authorized-domain list and the backend's `CORS_ALLOWED_ORIGINS` do not
+cover.
 
 ---
 
@@ -338,8 +441,12 @@ with credentials is both insecure and rejected by browsers.
 **2. Firebase must trust the frontend domain.**
 
 Firebase Console → Authentication → Settings → **Authorized domains** →
-add `yourdomain.com` and the `*.pages.dev` preview domain. Google sign-in
-fails on any unlisted domain even when everything else is correct.
+add `yourdomain.com` and the host's own domain — `*.pages.dev` on
+Cloudflare, or `<project>.vercel.app` on Vercel. Google sign-in fails on
+any unlisted domain even when everything else is correct, with
+`auth/unauthorized-domain`. Vercel wildcards are not accepted here, so a
+per-deployment preview URL is never authorized; that is another reason to
+test sign-in on the production domain.
 
 **3. Enable the sign-in methods you offer.**
 

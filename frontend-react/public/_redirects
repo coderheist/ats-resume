@@ -1,0 +1,25 @@
+# Cloudflare Pages SPA fallback for the client-only routes.
+#
+# `npm run build` prerenders one index.html per *indexable* route
+# (scripts/prerender.mjs, driven by INDEXABLE_ROUTES in src/lib/seo.js),
+# so /, /with-jd, /without-jd and /pricing each resolve to a real file on
+# disk and need no rule here. The five routes below are marked `noindex`
+# in src/lib/seo.js -- they are authenticated or render differently per
+# user -- so they are deliberately not prerendered, have no file, and a
+# direct hit or a refresh on one 404s without this.
+#
+# Listed explicitly rather than as a `/* /index.html 200` catch-all so a
+# genuinely mistyped URL still returns a real 404, instead of a soft 404
+# rendering an empty page with a 200. The cost is that a NEW client-only
+# route must be added here -- and to the `rewrites` in ../../vercel.json,
+# which mirrors this list -- or it will 404 on refresh in production
+# while working perfectly under `npm run dev`.
+#
+# Vite copies public/ verbatim into the build output, so this file ships
+# to frontend-react-dist/_redirects, which is where Cloudflare Pages
+# looks for it.
+/dashboard  /index.html  200
+/settings   /index.html  200
+/history    /index.html  200
+/login      /index.html  200
+/signup     /index.html  200
