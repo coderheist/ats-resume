@@ -1,0 +1,44 @@
+{
+  // Cloudflare Workers static-asset deployment for the React frontend.
+  //
+  // This project is deployed as a *Worker* (Workers Builds), not a Pages
+  // project. That distinction matters: Pages takes its "Build output
+  // directory" from a dashboard field, whereas a Worker has no such
+  // field at all -- the output location lives here, in `assets.directory`.
+  // Looking for the missing dashboard setting is the wrong search; this
+  // file is the setting.
+  //
+  // Dashboard settings that must agree with this file:
+  //   Root directory  = /            (NOT /frontend-react -- see below)
+  //   Build command   = npm run build
+  //   Deploy command  = npx wrangler deploy
+  //
+  // Root directory has to be the repository root. vite.config.js writes
+  // to ../frontend-react-dist, one level *above* frontend-react/, so
+  // rooting the build at frontend-react/ puts the output where the
+  // platform cannot reach it -- the build succeeds and then throws its
+  // own result away. The root package.json exists so the default
+  // `npm run build` still works from there.
+  "name": "ats-resume",
+  "compatibility_date": "2026-09-08",
+
+  "assets": {
+    // Relative to this file. Produced by `npm run build`; git-ignored,
+    // so it is generated during the build rather than committed.
+    "directory": "./frontend-react-dist",
+
+    // The five client-only routes (/login, /signup, /dashboard,
+    // /settings, /history) are deliberately not prerendered -- they are
+    // marked noindex in frontend-react/src/lib/seo.js because they are
+    // authenticated or render per-user -- so no file exists on disk for
+    // them and a direct hit or refresh would 404 without this.
+    //
+    // Note this is a catch-all: any unmatched path returns index.html
+    // with a 200, so a genuinely mistyped URL renders the SPA shell
+    // instead of a real 404. public/_redirects lists the five routes
+    // explicitly to keep that stricter behaviour where the platform
+    // honours it; this setting is the backstop that does not depend on
+    // whether it does.
+    "not_found_handling": "single-page-application"
+  }
+}
