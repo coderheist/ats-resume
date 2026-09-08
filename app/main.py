@@ -46,16 +46,32 @@ _default_origins = "http://localhost:5500,http://127.0.0.1:5500,http://localhost
 def _parse_origins(raw: str | None) -> list[str]:
     """Split the comma-separated env var into an exact-match allowlist.
 
-    The strip() is not cosmetic. An origin is compared to the request's
-    `Origin` header by exact string equality, so a value pasted with the
-    spaces people naturally type -- "https://a.com, https://b.com" --
-    silently fails to match the second origin, and the failure surfaces
-    only as a blocked request in a browser with nothing in the server
-    logs. Empty entries (a trailing comma) are dropped for the same
-    reason: "" can never match an Origin header, so keeping it would only
-    make the configured list misleading to read.
+    Both cleanups here fix real misconfigurations, not hypothetical ones,
+    and both fail the same miserable way: the browser blocks the request
+    before it reaches any route, so there is no log line, no traceback,
+    and nothing to see on the server at all.
+
+    The strip() handles the spaces people naturally type --
+    "https://a.com, https://b.com" -- where the second origin would
+    otherwise never match, since comparison is exact string equality.
+
+    The rstrip("/") handles a trailing slash, which is easier to get
+    wrong because it looks right. An `Origin` header is scheme + host +
+    port and never carries a path, so a configured
+    "https://example.com/" cannot match the "https://example.com" a
+    browser actually sends. Copying the URL out of a browser address bar
+    -- which shows the slash -- produces exactly this, and the resulting
+    CORS error names the origin *without* the slash, so the configured
+    value and the error message look like they agree.
+
+    Empty entries (a trailing comma) are dropped: "" can never match an
+    Origin header, so keeping it would only make the list misleading.
     """
-    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+    return [
+        origin.strip().rstrip("/")
+        for origin in (raw or "").split(",")
+        if origin.strip().rstrip("/")
+    ]
 
 
 def _parse_origin_regex(raw: str | None) -> str | None:

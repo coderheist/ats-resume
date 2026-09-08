@@ -26,6 +26,23 @@ def test_parse_origins_strips_the_spaces_people_type():
     assert _parse_origins("https://a.com, https://b.com") == ["https://a.com", "https://b.com"]
 
 
+def test_parse_origins_strips_a_trailing_slash():
+    # An Origin header is scheme + host + port and never carries a path,
+    # so "https://a.com/" could not match the "https://a.com" a browser
+    # sends. Copying the URL out of an address bar produces exactly this.
+    assert _parse_origins("https://a.com/") == ["https://a.com"]
+    assert _parse_origins("https://a.com/, https://b.com/") == ["https://a.com", "https://b.com"]
+    # A bare "/" is not an origin, only a slash, and must not survive as "".
+    assert _parse_origins("/") == []
+
+
+def test_configured_trailing_slash_still_admits_the_real_browser_origin():
+    # The end-to-end version of the bug: configured with a slash, the
+    # browser sends none, and the preflight must still succeed.
+    client = _client_with(allow_origins=_parse_origins(PRODUCTION + "/"))
+    assert _preflight(client, PRODUCTION).headers["access-control-allow-origin"] == PRODUCTION
+
+
 def test_parse_origins_drops_empty_entries():
     assert _parse_origins("https://a.com,,") == ["https://a.com"]
     assert _parse_origins("") == []
