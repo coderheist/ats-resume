@@ -208,6 +208,23 @@ Step 3.
    | Build output directory | `frontend-react-dist` |
    | Root directory | *(leave blank)* |
 
+   Both non-obvious values are load-bearing. The build command has to
+   `cd` because there is **no `package.json` at the repository root** —
+   the bare `npm run build` that Pages offers by default fails there with
+   `npm error code ENOENT ... Could not read package.json`. And the root
+   directory has to stay blank because `vite.config.js` writes to
+   `../frontend-react-dist`, one level *above* `frontend-react`; pointing
+   the root at `frontend-react` puts the output where Pages cannot see
+   it, and the build then succeeds and throws its own result away.
+
+   Expect the log to also show `Installing project dependencies: pip
+   install -r requirements.txt`. Pages detects the root
+   `requirements.txt` and installs the entire FastAPI backend — scipy,
+   scikit-learn, LangChain — before running the build command. It is
+   roughly a minute of pure waste on a frontend-only build, but it is
+   harmless: the build command installs its own npm dependencies and
+   never touches the Python ones.
+
 4. Environment variables — **all are build-time**, so a change needs a
    redeploy:
 
