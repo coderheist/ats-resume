@@ -205,7 +205,7 @@ export function Hero() {
 
       <section className="landing-section landing-cta" aria-labelledby="cta-heading">
         <h2 id="cta-heading">Check your resume now</h2>
-        <p className="section-lede">Free, and no account needed to run your first scan.</p>
+        <p className="section-lede">Free to run — create an account and your first scan starts right after.</p>
         {/* Wording deliberately differs from the hero's two CTAs above.
             Repeating identical link text on one page is ambiguous for
             screen-reader users navigating by link list, and varied,
