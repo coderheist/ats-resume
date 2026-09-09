@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AlertCircle } from "lucide-react";
 import { PasswordField } from "../components/PasswordField";
 import { Typewriter } from "../components/Typewriter";
@@ -19,6 +19,27 @@ import { useAuth } from "../lib/authContext";
  *    shows a real, visible "not configured yet" message instead of a
  *    cryptic SDK error or a silent no-op.
  */
+/**
+ * Where to land after a successful sign-in.
+ *
+ * ProtectedRoute stashes the path the visitor was actually trying to
+ * reach in the redirect's location state, so someone who clicked
+ * "Analyze against a job description" on the landing page arrives at
+ * /with-jd once signed in rather than at a generic history page with no
+ * memory of what they came to do.
+ *
+ * Only same-origin, single-slash paths are honoured: `from` reaches us
+ * through router state that a crafted link could otherwise use to bounce
+ * a freshly authenticated user off to another site.
+ */
+function safeRedirect(from) {
+  if (typeof from !== "string") return "/history";
+  if (!from.startsWith("/") || from.startsWith("//")) return "/history";
+  // Never bounce straight back to the auth pages themselves.
+  if (from === "/login" || from === "/signup") return "/history";
+  return from;
+}
+
 const QUOTES = {
   signin: { text: "Welcome back — pick up right where you left off.", author: "Resume Optimizer" },
   signup: { text: "Every application starts with knowing where you stand.", author: "Resume Optimizer" },
@@ -31,6 +52,8 @@ export function AuthPage({ mode }) {
   const [submitting, setSubmitting] = useState(false);
   const { configured, signInWithEmail, signUpWithEmail, signInWithGoogle } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const destination = safeRedirect(location.state?.from);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -48,7 +71,7 @@ export function AuthPage({ mode }) {
       } else {
         await signUpWithEmail(form.get("email"), form.get("password"), form.get("name"));
       }
-      navigate("/history");
+      navigate(destination, { replace: true });
     } catch (err) {
       setIsError(true);
       setNotice(err.message.replace(/^Firebase:\s*/, ""));
@@ -67,7 +90,7 @@ export function AuthPage({ mode }) {
     setNotice(null);
     try {
       await signInWithGoogle();
-      navigate("/history");
+      navigate(destination, { replace: true });
     } catch (err) {
       setIsError(true);
       setNotice(err.message.replace(/^Firebase:\s*/, ""));
@@ -118,7 +141,13 @@ export function AuthPage({ mode }) {
 
           <p className="auth-toggle">
             {isSignIn ? "Don't have an account? " : "Already have an account? "}
-            <Link to={isSignIn ? "/signup" : "/login"}>{isSignIn ? "Sign up" : "Sign in"}</Link>
+            {/* Carries the pending destination across the sign-in/sign-up
+                toggle, so someone who came from "Analyze against a job
+                description" and decides to register first still lands on
+                /with-jd rather than losing the errand. */}
+            <Link to={isSignIn ? "/signup" : "/login"} state={location.state}>
+              {isSignIn ? "Sign up" : "Sign in"}
+            </Link>
           </p>
 
           <div className="auth-divider">

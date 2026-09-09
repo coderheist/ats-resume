@@ -2,6 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./authContext";
 
+// Stubbed rather than relying on VITE_FIREBASE_* being absent: a real
+// .env in a developer's checkout would otherwise make isFirebaseConfigured()
+// true and this file would assert the opposite of what it renders.
+vi.mock("./firebase", () => ({
+  isFirebaseConfigured: vi.fn(() => false),
+  getFirebaseAuth: vi.fn(() => null),
+}));
+
 function Probe() {
   const { user, loading, configured } = useAuth();
   if (loading) return <span>loading</span>;
@@ -13,7 +21,7 @@ function Probe() {
 }
 
 describe("AuthProvider", () => {
-  it("resolves loading=false immediately when Firebase isn't configured (no VITE_FIREBASE_* in this test env)", async () => {
+  it("resolves loading=false immediately when Firebase isn't configured", async () => {
     render(
       <AuthProvider>
         <Probe />

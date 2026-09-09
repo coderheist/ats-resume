@@ -74,20 +74,31 @@ export function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Hero />} />
+        {/* Both scoring tools require an account. They were previously
+            open to anyone, which let a signed-out visitor burn analysis
+            runs with no way to attribute them to a user, save the report
+            to history, or enforce the plan entitlements the backend
+            hands out per account. ProtectedRoute remembers the path and
+            AuthPage returns the visitor here after they sign in, so the
+            gate costs one login rather than the errand they came for. */}
         <Route
           path="/with-jd"
           element={
-            <ReportPage title="Score against a job description" path="/with-jd">
-              <FullReportView />
-            </ReportPage>
+            <ProtectedRoute>
+              <ReportPage title="Score against a job description" path="/with-jd">
+                <FullReportView />
+              </ReportPage>
+            </ProtectedRoute>
           }
         />
         <Route
           path="/without-jd"
           element={
-            <ReportPage title="General ATS readiness" path="/without-jd">
-              <StandaloneReportView />
-            </ReportPage>
+            <ProtectedRoute>
+              <ReportPage title="General ATS readiness" path="/without-jd">
+                <StandaloneReportView />
+              </ReportPage>
+            </ProtectedRoute>
           }
         />
         <Route path="/pricing" element={<PricingPage />} />

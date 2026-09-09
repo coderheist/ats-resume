@@ -43,7 +43,7 @@ export const OG_IMAGE = `${SITE_URL}/og-image.png`;
 export const DEFAULT_SEO = {
   title: "Resume Optimizer — Free ATS Resume Checker & Job Match Score",
   description:
-    "Check how your resume scores against any job description. Get an evidence-based ATS match report showing missing keywords, skill gaps, and exactly what to fix. Free, no signup required.",
+    "Check how your resume scores against any job description. Get an evidence-based ATS match report showing missing keywords, skill gaps, and exactly what to fix. Free with an account.",
 };
 
 /**
@@ -65,14 +65,14 @@ export const PAGE_SEO = {
   "/": {
     title: "Free ATS Resume Checker & Job Match Score",
     description:
-      "See how your resume scores against any job description. Evidence-based ATS analysis: missing keywords, skill gaps, and what to fix first. Free, no signup.",
+      "See how your resume scores against any job description. Evidence-based ATS analysis: missing keywords, skill gaps, and what to fix first. Free with an account.",
     keywords:
       "ats resume checker, resume scanner, resume job description match, free resume checker, applicant tracking system, resume keyword scanner",
   },
   "/with-jd": {
     title: "Match Your Resume to a Job Description",
     description:
-      "Paste a job description for a requirement-by-requirement match report: knockout requirements, missing keywords, evidence strength, ranked fixes. Free scan.",
+      "Paste a job description for a requirement-by-requirement match report: knockout requirements, missing keywords, evidence strength, ranked fixes. Free.",
     keywords:
       "resume job description match, resume keyword matcher, tailor resume to job, ats keyword scanner, job description analyzer",
   },
@@ -188,7 +188,7 @@ export function organizationLd() {
 export const FAQ = [
   {
     q: "Is this resume checker free?",
-    a: "Yes. Scoring a resume against a job description and checking general ATS readiness are both free and need no account. Signing in adds saved history; paid plans add unlimited monthly scans and the voice-editing agent.",
+    a: "Yes. Scoring a resume against a job description and checking general ATS readiness are both free on the starter plan — you just need a free account, which is what saves your scan history to you. Paid plans add unlimited monthly scans and the voice-editing agent.",
   },
   {
     q: "What is an ATS and why does my resume score matter?",
