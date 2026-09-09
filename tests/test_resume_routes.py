@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import pytest
@@ -223,6 +224,107 @@ def test_explicit_tier_still_forces_escalation_regardless_of_confidence(client):
     # complete, then kept the heuristic result as a usable fallback.
     assert any("ANTHROPIC_API_KEY" in w for w in body["warnings"])
     assert len(body["resume"]["work"]) == 1
+
+
+# --------------------------------------------------------------------
+# Regression: the tier-less escalation path used to 500
+# --------------------------------------------------------------------
+#
+# A request that names no tier still escalates to active_provider() when
+# the heuristic parse scores below the confidence gate. The route used to
+# build its `provider_used` field from the tier the *caller* sent, so on
+# that path it read `.value` off the None that "no tier" resolves to and
+# raised AttributeError -- a 500 on the default upload path, after
+# parsing had already succeeded, and outside the reach of the endpoint's
+# own try/except safety net (which only wraps parsing, not the response
+# construction that followed it). The fix reports the provider the parse
+# result itself recorded; these two tests pin both halves.
+
+LOW_CONFIDENCE_TEXT = """Jane Doe
+an unstructured blob of prose with no recognisable section headers
+and nothing that looks like a dated role or a skills list at all
+"""
+
+
+def _fake_llm_success(monkeypatch, name="Escalated Person"):
+    """Stand in for a configured provider that answers successfully."""
+    resume_json = {"basics": {"name": name}, "work": [], "education": [], "skills": [], "projects": []}
+
+    class _FakeClient:
+        def create_message(self, **kwargs):
+            import json
+            return {"content": [{"type": "text", "text": json.dumps(resume_json)}]}
+
+    monkeypatch.setattr(
+        "app.core.llm.client_factory.get_client_for",
+        lambda task, provider=None: (_FakeClient(), "gemini-2.5-flash"),
+    )
+
+
+def test_parse_text_no_tier_escalation_reports_active_provider_not_500(client, monkeypatch):
+    """No tier + a parse the gate isn't confident about + a configured
+    provider: must be a 200 naming the provider that actually answered
+    (LLM_PROVIDER), not the tier the caller didn't send."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+    _fake_llm_success(monkeypatch)
+
+    resp = client.post("/resume/parse-text", json={"text": LOW_CONFIDENCE_TEXT})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["parse_method"] == "llm"
+    assert body["provider_used"] == "gemini"
+
+
+def test_parse_file_no_tier_escalation_reports_active_provider_not_500(client, monkeypatch):
+    """Same path through the upload endpoint -- the one the product UI
+    actually calls when someone drops in a resume without touching the
+    tier selector."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+    _fake_llm_success(monkeypatch)
+
+    from docx import Document
+
+    buf = io.BytesIO()
+    document = Document()
+    for line in LOW_CONFIDENCE_TEXT.splitlines():
+        document.add_paragraph(line)
+    document.save(buf)
+
+    resp = client.post(
+        "/resume/parse-file",
+        files={"file": (
+            "messy.docx", buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["parse_method"] == "llm"
+    assert body["provider_used"] == "gemini"
+
+
+def test_heuristic_result_never_claims_a_provider(client, monkeypatch):
+    """The other half: when the LLM node is entered but can't complete,
+    the heuristic result is kept and provider_used must stay null --
+    reporting the requested tier there would credit a provider that
+    never answered."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+    monkeypatch.setattr(
+        "app.core.parsing.resume_extraction._extract_via_llm",
+        lambda raw_text, provider: None,
+    )
+
+    resp = client.post("/resume/parse-text", json={"text": LOW_CONFIDENCE_TEXT})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["parse_method"] == "heuristic"
+    assert body["provider_used"] is None
 
 
 def test_parse_file_encrypted_pdf_returns_200_with_warning_not_500(client):

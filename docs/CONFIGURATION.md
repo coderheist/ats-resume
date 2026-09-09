@@ -89,6 +89,19 @@ open-weight provider, or Groq's OpenAI-compatible endpoint.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///./dev.db` | SQLAlchemy connection URL |
+| `DB_POOL_RECYCLE_SECONDS` | `1800` | Retire pooled connections after this long. Non-SQLite only |
+
+A `postgres://` URL is rewritten to `postgresql://` on startup. SQLAlchemy 2.x
+dropped the `postgres` dialect alias, so the original scheme raises
+`NoSuchModuleError` from `create_engine()` before the server binds a port — and
+Heroku, Render and Railway all inject the connection string in exactly that
+form. Supabase does not, which is why this can stay hidden until you move hosts.
+
+Non-SQLite engines are built with `pool_pre_ping` enabled. Managed Postgres,
+pgbouncer, load balancers and NAT gateways all close idle connections without
+telling the pool, so without a liveness check on checkout the first request
+after a quiet period fails with `server closed the connection unexpectedly` or
+`SSL connection has been closed unexpectedly`, then succeeds on retry.
 
 ### Authentication
 
@@ -117,6 +130,22 @@ Unset means `/payments/*` returns `503`.
 | `CORS_ALLOWED_ORIGIN_REGEX` | unset | Pattern for origins that change per build, e.g. Vercel preview deployments |
 | `RATE_LIMIT_REQUESTS` | `60` | Requests per window per IP |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Window length |
+| `TRUSTED_PROXY_HOPS` | `0` | Number of reverse proxies in front of the API |
+
+**Set `TRUSTED_PROXY_HOPS` if anything sits in front of this API.** Left at `0`,
+the limiter counts against the immediate peer — which behind a load balancer is
+the load balancer, identical for every request. All traffic then shares a single
+bucket, and the configured limit stops being per-caller and becomes a global
+ceiling: at the default 60/60s, the 61st request from anyone in a minute returns
+429 to a user who made one request. It reads like a traffic spike rather than a
+misconfiguration, because the limiter is doing exactly what it was told.
+
+Set it to the number of proxies that append to `X-Forwarded-For`: `1` behind a
+single load balancer (Render, Railway, Fly, an ALB, an nginx ingress), `2` behind
+a CDN in front of that. The count matters — the caller is located from the right
+of the header, so a spoofed value a client sends itself is ignored. Leave it at
+`0` when the API is directly exposed; trusting the header there would let anyone
+rotate it per request and never be limited.
 
 Do not set `CORS_ALLOWED_ORIGINS` to `*` in production. The API accepts
 credentials-bearing `Authorization` headers.

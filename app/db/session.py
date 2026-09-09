@@ -15,20 +15,90 @@ it at Postgres+pgvector.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from app.db.models import Base
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-_using_sqlite = DATABASE_URL.startswith("sqlite") if DATABASE_URL else True
-DATABASE_URL = DATABASE_URL or "sqlite:///./dev.db"
+SQLITE_FALLBACK_URL = "sqlite:///./dev.db"
 
-# check_same_thread only matters for the SQLite dev fallback.
-_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-engine = create_engine(DATABASE_URL, connect_args=_connect_args)
+def normalize_database_url(raw: str | None) -> str:
+    """DATABASE_URL as given -> a URL SQLAlchemy 2.x will actually accept.
+
+    Rewrites the `postgres://` scheme to `postgresql://`. This is not
+    cosmetic: SQLAlchemy 2.x removed the `postgres` dialect alias, so a
+    `postgres://` URL raises
+
+        NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgres
+
+    from create_engine() at import time -- which means the process dies
+    during startup, before uvicorn binds a port, and the platform reports
+    only a generic "container failed to start" with no hint at the cause.
+
+    It matters because several managed platforms still hand out exactly
+    that scheme in the connection string they inject: Heroku, Render and
+    Railway all do. Nobody types this URL by hand, so "just write it
+    correctly" isn't available as a fix -- the value arrives from the
+    platform already wrong for this library. Supabase (what this repo is
+    set up for, see docs/DEPLOYMENT.md) gives `postgresql://` and is
+    unaffected, which is precisely why this can go unnoticed until the
+    day someone deploys somewhere else.
+
+    Everything else is passed through untouched, including query
+    parameters like `?sslmode=require`.
+    """
+    if not raw or not raw.strip():
+        return SQLITE_FALLBACK_URL
+    url = raw.strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    return url
+
+
+def engine_kwargs_for(url: str) -> dict[str, Any]:
+    """create_engine() options appropriate to the database behind `url`.
+
+    A function rather than inline setup so the choice can be asserted
+    directly, without reimporting this module to rebuild the engine.
+    """
+    if url.startswith("sqlite"):
+        # check_same_thread only matters for the SQLite dev fallback.
+        return {"connect_args": {"check_same_thread": False}}
+    # Pooled connections outlive the network path they were opened over.
+    # A managed Postgres (Supabase, RDS, a pgbouncer in front of either)
+    # closes connections that have been idle for a few minutes, and a
+    # load balancer or NAT gateway silently drops the flow even sooner --
+    # none of which the pool is told about. The next request checks out a
+    # socket that looks fine and only discovers otherwise mid-query:
+    #
+    #   OperationalError: server closed the connection unexpectedly
+    #   OperationalError: SSL connection has been closed unexpectedly
+    #
+    # The failure shape is what makes this expensive to diagnose from the
+    # outside: it is intermittent, it clusters after quiet periods
+    # (overnight, or the first request after a lull), and it disappears on
+    # retry, so it reads like a flaky database rather than a pool that is
+    # handing out dead sockets.
+    #
+    # pool_pre_ping issues a cheap liveness check on checkout and
+    # transparently replaces a connection that has gone away. pool_recycle
+    # additionally retires connections before they get old enough to be
+    # reaped -- 30 minutes is comfortably under the common idle timeouts.
+    # Deliberately applied only to non-SQLite: a local file database has
+    # no connection to lose, so this would be pure overhead there.
+    return {
+        "pool_pre_ping": True,
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE_SECONDS", "1800")),
+    }
+
+
+DATABASE_URL = normalize_database_url(os.environ.get("DATABASE_URL"))
+_using_sqlite = DATABASE_URL.startswith("sqlite")
+
+engine = create_engine(DATABASE_URL, **engine_kwargs_for(DATABASE_URL))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

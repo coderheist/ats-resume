@@ -10,6 +10,19 @@ razorpay>=1.4               # payment gateway -- app/core/billing/razorpay_clien
 # Data layer
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
+alembic>=1.19             # DB migrations -- REQUIRED, not optional. The Dockerfile
+                          # copies alembic/ and alembic.ini into the image and
+                          # docs/DEPLOYMENT.md's checklist instructs running
+                          # `alembic upgrade head` against the production database,
+                          # so leaving this uninstalled made that step fail with
+                          # "alembic: not found" inside the very container meant to
+                          # run it. It matters more than a missing CLI usually would
+                          # because app/db/session.py only auto-creates tables for
+                          # SQLite -- Postgres deliberately has no such fallback, so
+                          # a deploy whose migrations never ran comes up healthy
+                          # (/health does not touch the database) and then 500s on
+                          # every account-backed route with
+                          # `relation "users" does not exist`.
 
 # Scoring engine (dev/scaffold fallback)
 scikit-learn>=1.4
@@ -67,4 +80,3 @@ langchain-groq>=1.1         # Basic tier (Groq)      -- requires GROQ_API_KEY
 #                               # resumes (app/core/parsing/parser_interface.py + file_extraction.py)
 # marker-pdf>=1.0               # fallback parsing for scanned/degraded PDFs
 # pgvector>=0.2                # Python client for the pgvector column type
-# alembic>=1.19                # DB migrations (see "Database migrations" below)

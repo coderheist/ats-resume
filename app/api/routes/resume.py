@@ -21,6 +21,19 @@ Neither endpoint ever 500s on a parse it can't make sense of -- see
 resume_extraction.py's module docstring on the two-tier (LLM, then
 heuristic) fallback. A person always gets *something* back to review and
 correct, with `warnings` explaining what to double-check.
+
+`provider_used` in the response is read off the parse result itself
+(ParsedResumeResult.provider_used), never reconstructed from the `tier`
+the caller sent. Those two disagree on the most common path there is: a
+request naming no tier still escalates to active_provider() when the
+heuristic parse scores below the confidence gate, so a request that
+asked for no tier is answered by an LLM anyway. Deriving the field from
+the requested tier therefore meant reading `.value` off the None that
+"no tier" resolves to, and every such upload 500'd with AttributeError
+the moment the gate escalated -- reproduced end-to-end against a
+configured provider. Note that neither endpoint's try/except safety net
+covers this, because it happened while building the response, after
+parsing had already succeeded.
 """
 from __future__ import annotations
 
@@ -61,6 +74,11 @@ def _resolve_tier(tier: str | None):
 
     Raises HTTPException(400) for an invalid tier string rather than
     letting the ValueError from provider_for_tier become an unhandled 500.
+
+    What this returns answers "what did the caller ask for", NOT "what
+    answered the request" -- the two differ whenever the confidence gate
+    escalates on a tier-less call. Both endpoints below report
+    `parsed.provider_used` for the latter; see the module docstring.
     """
     if tier is None:
         return None
@@ -141,7 +159,7 @@ async def parse_file(file: UploadFile = File(...), tier: str | None = Form(None)
     return ResumeParseResponse(
         resume=parsed.resume, parse_method=parsed.parse_method,
         warnings=extraction.warnings + parsed.warnings,
-        provider_used=resolved_provider.value if parsed.parse_method == "llm" else None,
+        provider_used=parsed.provider_used.value if parsed.provider_used else None,
         format_analysis=format_analysis,
     )
 
@@ -158,5 +176,5 @@ def parse_text(request: ResumeParseTextRequest) -> ResumeParseResponse:
     parsed = parse_resume_text(request.text, provider=resolved_provider)
     return ResumeParseResponse(
         resume=parsed.resume, parse_method=parsed.parse_method, warnings=parsed.warnings,
-        provider_used=resolved_provider.value if parsed.parse_method == "llm" else None,
+        provider_used=parsed.provider_used.value if parsed.provider_used else None,
     )

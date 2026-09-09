@@ -500,6 +500,16 @@ class ParsedResumeResult:
     resume: JsonResume
     parse_method: str  # "llm" | "heuristic"
     warnings: list[str] = field(default_factory=list)
+    # Which provider actually produced this result, or None when the
+    # heuristic answered. This has to be reported back rather than left
+    # for the caller to infer from what it *requested*: the confidence
+    # gate can escalate to active_provider() on a request that named no
+    # tier at all, so "what the caller asked for" and "what answered"
+    # are genuinely different values on the default upload path. The
+    # route used to reconstruct it from the requested tier and crashed
+    # with AttributeError on exactly that path -- see
+    # app/api/routes/resume.py.
+    provider_used: Provider | None = None
 
 
 class _ExtractionState(TypedDict):
@@ -510,6 +520,7 @@ class _ExtractionState(TypedDict):
     parse_method: str
     confidence: float
     warnings: list[str]
+    provider_used: Provider | None  # set by _llm_node only when the LLM call actually succeeds
 
 
 def _heuristic_node(state: _ExtractionState) -> dict[str, Any]:
@@ -554,7 +565,7 @@ def _llm_node(state: _ExtractionState) -> dict[str, Any]:
         # warning no longer applies once the LLM result replaces the
         # heuristic one, and LangGraph's state merge would otherwise
         # silently carry it forward as a stale, confusing leftover.
-        return {"resume": resume, "parse_method": "llm", "warnings": []}
+        return {"resume": resume, "parse_method": "llm", "warnings": [], "provider_used": provider}
 
     if _configured_api_key(provider):
         warning = (
@@ -663,10 +674,12 @@ def parse_resume_text(
     initial_state: _ExtractionState = {
         "raw_text": raw_text, "provider": resolved_provider, "force_llm": force_llm,
         "resume": None, "parse_method": "heuristic", "confidence": 0.0, "warnings": [],
+        "provider_used": None,
     }
     final_state = _compiled_graph.invoke(initial_state)
     return ParsedResumeResult(
         resume=final_state["resume"] or JsonResume(),
         parse_method=final_state["parse_method"],
         warnings=final_state["warnings"],
+        provider_used=final_state.get("provider_used"),
     )

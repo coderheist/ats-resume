@@ -67,6 +67,10 @@ Razorpay must be able to reach `POST /payments/webhook` from the public internet
 
 ### Correctness
 
+- [ ] `TRUSTED_PROXY_HOPS` set to the number of proxies in front of the API
+      (`1` behind a single load balancer). Left at `0` behind a proxy, every
+      caller shares one rate-limit bucket and unrelated users 429 each other —
+      see [CONFIGURATION.md](CONFIGURATION.md#http).
 - [ ] `alembic upgrade head` applied against the production database.
 - [ ] `create extension if not exists vector;` run before migrating.
 - [ ] Model identifiers in [router.py](../app/core/llm/router.py) verified against
@@ -79,15 +83,11 @@ Razorpay must be able to reach `POST /payments/webhook` from the public internet
 
 ### Known issues to weigh before shipping
 
-- [ ] **`/resume/parse-*` returns 500** when no `tier` is passed and the
-      confidence gate escalates to a configured LLM
-      ([resume.py:144](../app/api/routes/resume.py#L144),
-      [resume.py:161](../app/api/routes/resume.py#L161)). This is on the default
-      upload path. Fix it or have the frontend always send an explicit `tier`.
 - [ ] **Email/password auth errors show raw Firebase codes.** Only Google popup
       errors are translated.
 - [ ] **Rate limiting is per-process.** With N replicas the real ceiling is N ×
-      the configured limit.
+      the configured limit. (Distinct from the proxy problem above, which
+      `TRUSTED_PROXY_HOPS` handles; this one needs a shared store to fix.)
 - [ ] **Voice sessions are in-process.** They break under more than one replica.
 - [ ] **Supabase has not been exercised against a live project** from this
       codebase. Verify the connection under load before trusting it.
