@@ -13,11 +13,11 @@ from fastapi.testclient import TestClient
 
 from app.main import _parse_origin_regex, _parse_origins, app
 
-# Cloudflare Pages origin shapes: a stable production hostname, and a
-# per-build preview hostname whose leading label changes every push.
-PRODUCTION = "https://myproject.pages.dev"
-PREVIEW = "https://a8onawoux.myproject.pages.dev"
-PREVIEW_REGEX = r"https://[a-z0-9-]+\.myproject\.pages\.dev"
+# Vercel origin shapes: a stable production hostname, and a per-build
+# preview hostname whose leading label changes every push.
+PRODUCTION = "https://myproject.vercel.app"
+PREVIEW = "https://a8onawoux-myproject.vercel.app"
+PREVIEW_REGEX = r"https://[a-z0-9-]+-myproject\.vercel\.app"
 
 
 def test_parse_origins_strips_the_spaces_people_type():

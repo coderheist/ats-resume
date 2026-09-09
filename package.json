@@ -1,7 +1,7 @@
 {
   "name": "resume-optimizer",
   "private": true,
-  "description": "Root-level delegate so a bare `npm run build` at the repository root builds the frontend. The application's real package.json is frontend-react/package.json; nothing is installed here. This exists because hosted build platforms (Cloudflare Pages, Vercel) default to running `npm run build` from the repository root, where there was previously no package.json at all -- the build then failed with `npm error enoent Could not read package.json` before running a single line of the app's own build. Output still lands in frontend-react-dist/ (see frontend-react/vite.config.js), which is what the platform's build output directory must point at.",
+  "description": "Root-level delegate so a bare `npm run build` at the repository root builds the frontend. The application's real package.json is frontend-react/package.json; nothing is installed here. This exists because hosted build platforms default to running `npm run build` from the repository root, where there was previously no package.json at all -- the build then failed with `npm error enoent Could not read package.json` before running a single line of the app's own build. Output still lands in frontend-react-dist/ (see frontend-react/vite.config.js), which is what the platform's build output directory must point at.",
   "scripts": {
     "build": "cd frontend-react && npm ci && npm run build",
     "test": "cd frontend-react && npm test"
