@@ -60,6 +60,48 @@ async function _authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * Read a successful response as JSON, failing with something diagnosable
+ * when the body isn't JSON at all.
+ *
+ * The case this exists for is a misconfigured deploy, and it is worth
+ * spelling out because the browser's own error names neither the request
+ * nor the cause. With VITE_API_BASE_URL unset, BASE_URL falls back to ""
+ * and every call goes to the FRONTEND's origin rather than the API. The
+ * static host answers those with index.html -- and some paths are both an
+ * API endpoint and a client-side route, so this is not even a 404:
+ * `/history` is a page as well as an endpoint, and vercel.json rewrites
+ * it to /index.html explicitly. The response is therefore a 200 carrying
+ * HTML, `res.ok` is true, the error path below is never entered, and
+ * res.json() fails with
+ *
+ *   Unexpected token '<', "<!doctype "... is not valid JSON
+ *
+ * which sends you looking at the API for a bug that is entirely in the
+ * frontend's configuration. Checking the content type first turns it into
+ * a message naming the URL that answered and what to set.
+ */
+async function _readJson(res, path) {
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("json")) return res.json();
+
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const target = `${BASE_URL || origin}${path}`;
+  // Both branches name VITE_API_BASE_URL, because a wrong value fails
+  // exactly as often as a missing one -- pointing it at the frontend's
+  // own port, or at localhost in a build real users load, both end here.
+  const cause = BASE_URL
+    ? `That is VITE_API_BASE_URL (${BASE_URL}); it should be the backend's origin, ` +
+      "and a backend must actually be serving it."
+    : "VITE_API_BASE_URL is not set, so this request went to the frontend's own origin " +
+      "and was answered by the static site instead of the API. Set it to the backend's " +
+      "origin and rebuild.";
+  throw new ApiError(
+    `Expected JSON from ${target} but the response was ${contentType || "an unknown content type"}. ${cause}`,
+    res.status
+  );
+}
+
 export async function apiPost(path, body) {
   let res;
   try {
@@ -77,7 +119,7 @@ export async function apiPost(path, body) {
 
   if (!res.ok) throw await _toApiError(res);
 
-  return res.json();
+  return _readJson(res, path);
 }
 
 export async function apiGet(path) {
@@ -88,7 +130,7 @@ export async function apiGet(path) {
     throw new ApiError(`Couldn't reach the API at ${path}. (${networkErr.message})`, 0);
   }
   if (!res.ok) throw await _toApiError(res);
-  return res.json();
+  return _readJson(res, path);
 }
 
 /**
@@ -116,5 +158,5 @@ export async function apiPostFile(path, file, extraFields = {}) {
 
   if (!res.ok) throw await _toApiError(res);
 
-  return res.json();
+  return _readJson(res, path);
 }
