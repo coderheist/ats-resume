@@ -18,22 +18,53 @@ const FEATURE_LABELS = {
   jd_bias_audit_tool: "JD bias audit tool",
 };
 
+const CURRENCY_LABELS = { USD: "USD ($)", INR: "INR (₹)" };
+const CURRENCY_SYMBOLS = { USD: "$", INR: "₹" };
+
+/**
+ * Prices are listed per currency in app/config.py, never converted
+ * here -- so what the card shows is exactly what create-order charges,
+ * with no exchange rate able to move it in between.
+ */
 export function PricingPage() {
   const { user, configured } = useAuth();
   const navigate = useNavigate();
   const [tiers, setTiers] = useState(null);
   const [billingCycle, setBillingCycle] = useState("monthly");
+  const [currency, setCurrency] = useState("USD");
+  const [currencies, setCurrencies] = useState(["USD"]);
   const [currentTier, setCurrentTier] = useState(null);
   const [checkoutStatus, setCheckoutStatus] = useState({}); // { [tierId]: "idle" | "processing" | "success" | "error" }
   const [checkoutError, setCheckoutError] = useState(null);
 
   useEffect(() => {
-    apiGet("/billing/tiers").then((data) => setTiers(data.consumer));
+    apiGet("/billing/tiers").then((data) => {
+      setTiers(data.consumer);
+      // Served by the backend rather than hard-coded: a toggle offering
+      // a currency checkout would reject is worse than not offering it.
+      if (data.currencies?.length) setCurrencies(data.currencies);
+      if (data.default_currency) setCurrency(data.default_currency);
+    });
   }, []);
 
   useEffect(() => {
     if (user) apiGet("/auth/me").then((data) => setCurrentTier(data.tier)).catch(() => {});
   }, [user]);
+
+  // The tier objects carry a field per (cycle, currency) pair --
+  // monthly_price_inr, annual_price_usd, and so on -- mirroring
+  // config.py's price_for(). null means this plan doesn't offer that
+  // combination, which the card renders as "Not offered".
+  function priceFor(tier) {
+    return tier[`${billingCycle}_price_${currency.toLowerCase()}`] ?? null;
+  }
+
+  function formatPrice(value) {
+    const symbol = CURRENCY_SYMBOLS[currency] || `${currency} `;
+    // Indian prices are four and five digits, so they need thousands
+    // separators to stay readable where the dollar ones never did.
+    return `${symbol}${Number(value).toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`;
+  }
 
   async function handleUpgrade(tierId) {
     if (!configured || !user) {
@@ -43,7 +74,7 @@ export function PricingPage() {
     setCheckoutError(null);
     setCheckoutStatus((s) => ({ ...s, [tierId]: "processing" }));
     try {
-      const order = await apiPost("/payments/create-order", { tier: tierId, billing_cycle: billingCycle, currency: "USD" });
+      const order = await apiPost("/payments/create-order", { tier: tierId, billing_cycle: billingCycle, currency });
       const result = await openRazorpayCheckout(order, { prefillEmail: user.email });
       await apiPost("/payments/verify", result);
       setCheckoutStatus((s) => ({ ...s, [tierId]: "success" }));
@@ -81,6 +112,20 @@ export function PricingPage() {
         </button>
       </div>
 
+      {currencies.length > 1 && (
+        <div className="billing-toggle" style={{ marginTop: 8 }}>
+          {currencies.map((code) => (
+            <button
+              key={code}
+              className={`billing-toggle-btn ${currency === code ? "active" : ""}`}
+              onClick={() => setCurrency(code)}
+            >
+              {CURRENCY_LABELS[code] || code}
+            </button>
+          ))}
+        </div>
+      )}
+
       {!configured && (
         <p className="tag-empty" style={{ marginBottom: 16 }}>
           Accounts and checkout aren't connected yet in this deployment (no Firebase/Razorpay project configured) —
@@ -94,7 +139,7 @@ export function PricingPage() {
       {tiers && (
         <div className="pricing-grid">
           {Object.values(tiers).map((tier) => {
-            const price = billingCycle === "annual" ? tier.annual_price_usd : tier.monthly_price_usd;
+            const price = priceFor(tier);
             const isFree = tier.id === "free";
             const isCurrent = currentTier === tier.id;
             const status = checkoutStatus[tier.id] || "idle";
@@ -110,7 +155,7 @@ export function PricingPage() {
                     <span className="tag-empty">Not offered {billingCycle}</span>
                   ) : (
                     <>
-                      ${price}
+                      {formatPrice(price)}
                       <span className="pricing-card-period">/{billingCycle === "annual" ? "yr" : "mo"}</span>
                     </>
                   )}

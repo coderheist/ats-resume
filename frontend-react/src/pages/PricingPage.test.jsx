@@ -130,3 +130,66 @@ describe("PricingPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
+
+describe("PricingPage currency", () => {
+  const TIERS_RESPONSE = {
+    consumer: {
+      starter: {
+        id: "starter", name: "Starter", features: [],
+        monthly_price_usd: 15, annual_price_usd: 108,
+        monthly_price_inr: 1249, annual_price_inr: 8999,
+      },
+    },
+    currencies: ["USD", "INR"],
+    default_currency: "USD",
+  };
+
+  function mountPricing() {
+    apiGet.mockImplementation((path) =>
+      path === "/billing/tiers" ? Promise.resolve(TIERS_RESPONSE) : Promise.resolve({ tier: "free" }),
+    );
+    return render(
+      <MemoryRouter>
+        <AuthProvider>
+          <PricingPage />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("defaults to the currency the backend nominates", async () => {
+    mountPricing();
+    expect(await screen.findByText(/\$15/)).toBeInTheDocument();
+  });
+
+  it("shows the listed INR price, not a conversion of the USD one", async () => {
+    mountPricing();
+    await screen.findByText(/\$15/);
+
+    fireEvent.click(screen.getByRole("button", { name: /INR/ }));
+
+    // 1,249 is config.py's own number. A conversion of $15 would land
+    // nowhere near it, which is the whole point of listing prices.
+    expect(await screen.findByText(/1,249/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$15/)).not.toBeInTheDocument();
+  });
+
+  it("applies the currency to the annual price too", async () => {
+    mountPricing();
+    await screen.findByText(/\$15/);
+
+    fireEvent.click(screen.getByRole("button", { name: /INR/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Annual$/ }));
+
+    expect(await screen.findByText(/8,999/)).toBeInTheDocument();
+  });
+
+  it("offers only the currencies the backend supports", async () => {
+    mountPricing();
+    await screen.findByText(/\$15/);
+
+    expect(screen.getByRole("button", { name: /USD/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /INR/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /EUR/ })).not.toBeInTheDocument();
+  });
+});

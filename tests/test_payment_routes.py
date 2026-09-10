@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import B2C_TIERS
 from app.core.billing import razorpay_client
 from app.db.models import Base, Payment, Subscription
 from app.db.session import get_db
@@ -338,3 +340,145 @@ class TestWebhookMalformedPayloads:
         payment = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_hardening_1").first()
         assert payment.status == "paid"
         assert payment.razorpay_payment_id == "pay_h1"
+
+
+class TestCreateOrderFailureModes:
+    """The two paths Razorpay's own integration checklist calls out:
+    an amount below the provider's floor, and the provider itself not
+    answering."""
+
+    @pytest.fixture(autouse=True)
+    def _billing_env(self, monkeypatch):
+        monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
+        monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
+
+    def _order(self, client, tier="starter", cycle="monthly"):
+        return client.post(
+            "/payments/create-order",
+            json={"tier": tier, "billing_cycle": cycle, "currency": "USD"},
+            headers=AUTH_HEADERS,
+        )
+
+    def test_amount_below_the_floor_is_rejected_before_calling_razorpay(self, client, monkeypatch):
+        """Catching it here costs nothing; letting it through costs a
+        round trip and surfaces as a payment outage rather than a pricing
+        mistake."""
+        called = []
+        monkeypatch.setattr(
+            "app.api.routes.payments.create_order",
+            lambda **kw: called.append(kw) or {"id": "order_x"},
+        )
+        # A tier priced under Razorpay's 100-unit floor.
+        monkeypatch.setitem(
+            B2C_TIERS, "starter",
+            replace(B2C_TIERS["starter"], monthly_price_usd=0.5),
+        )
+
+        resp = self._order(client)
+
+        assert resp.status_code == 400
+        assert "minimum" in resp.json()["detail"].lower()
+        assert not called, "Razorpay must not be called for an invalid amount"
+
+    def test_provider_failure_is_a_502_and_writes_no_payment_row(self, client, db_session, monkeypatch):
+        """A checkout that never reached Razorpay must leave nothing
+        behind pretending it did."""
+        def boom(**kwargs):
+            raise RuntimeError("connection reset by peer")
+
+        monkeypatch.setattr("app.api.routes.payments.create_order", boom)
+
+        resp = self._order(client)
+
+        assert resp.status_code == 502
+        assert "no charge was made" in resp.json()["detail"].lower()
+        assert db_session.query(Payment).count() == 0
+
+    def test_a_working_order_is_unaffected(self, client, db_session, monkeypatch):
+        monkeypatch.setattr(
+            "app.api.routes.payments.create_order",
+            lambda **kw: {"id": "order_ok_1"},
+        )
+
+        resp = self._order(client)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["order_id"] == "order_ok_1"
+        assert body["amount"] == 1500  # starter, $15 -> smallest unit
+        assert body["key_id"] == "rzp_test_fake"
+        # The secret must never appear in a response the browser reads.
+        assert "fake_secret" not in resp.text
+        assert db_session.query(Payment).filter(Payment.razorpay_order_id == "order_ok_1").count() == 1
+
+
+class TestCurrency:
+    """USD and INR are both listed prices, never conversions of each
+    other -- so a customer is charged the number the pricing page showed
+    them, with no exchange rate able to move it in between."""
+
+    @pytest.fixture(autouse=True)
+    def _billing_env(self, monkeypatch):
+        monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
+        monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
+
+    def _order(self, client, monkeypatch, currency, tier="starter", cycle="monthly"):
+        monkeypatch.setattr(
+            "app.api.routes.payments.create_order",
+            lambda **kw: {"id": f"order_{currency}_{cycle}", **kw},
+        )
+        return client.post(
+            "/payments/create-order",
+            json={"tier": tier, "billing_cycle": cycle, "currency": currency},
+            headers=AUTH_HEADERS,
+        )
+
+    def test_usd_uses_the_usd_price(self, client, monkeypatch):
+        body = self._order(client, monkeypatch, "USD").json()
+        assert body["currency"] == "USD"
+        assert body["amount"] == 1500  # $15.00 in cents
+
+    def test_inr_uses_the_listed_inr_price_not_a_conversion(self, client, monkeypatch):
+        body = self._order(client, monkeypatch, "INR").json()
+        assert body["currency"] == "INR"
+        assert body["amount"] == 124900  # Rs 1,249 in paise -- config.py's own number
+
+    def test_annual_respects_the_currency_too(self, client, monkeypatch):
+        assert self._order(client, monkeypatch, "INR", cycle="annual").json()["amount"] == 899900
+        assert self._order(client, monkeypatch, "USD", cycle="annual").json()["amount"] == 10800
+
+    def test_currency_is_case_insensitive(self, client, monkeypatch):
+        assert self._order(client, monkeypatch, "inr").json()["currency"] == "INR"
+
+    def test_unsupported_currency_is_a_400_naming_the_valid_ones(self, client, monkeypatch):
+        resp = self._order(client, monkeypatch, "EUR")
+        assert resp.status_code == 400
+        assert "USD" in resp.json()["detail"] and "INR" in resp.json()["detail"]
+
+    def test_the_stored_row_records_the_charged_currency(self, client, db_session, monkeypatch):
+        """Reconciliation depends on this: an amount without its currency
+        is meaningless when two are in play."""
+        self._order(client, monkeypatch, "INR")
+        row = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_INR_monthly").first()
+        assert row.currency == "INR"
+        assert row.amount == 124900
+
+    def test_a_plan_without_an_annual_option_is_rejected_in_either_currency(self, client, monkeypatch):
+        for code in ("USD", "INR"):
+            resp = self._order(client, monkeypatch, code, tier="pro_plus", cycle="annual")
+            assert resp.status_code == 400, code
+
+
+class TestTiersEndpointCurrencies:
+    def test_lists_both_currencies_and_a_default(self, client):
+        body = client.get("/billing/tiers").json()
+        assert body["currencies"] == ["USD", "INR"]
+        assert body["default_currency"] == "USD"
+
+    def test_every_tier_carries_a_price_per_currency(self, client):
+        body = client.get("/billing/tiers").json()
+        for group in ("consumer", "business"):
+            for tid, tier in body[group].items():
+                for field in ("monthly_price_usd", "monthly_price_inr",
+                              "annual_price_usd", "annual_price_inr"):
+                    assert field in tier, f"{tid} missing {field}"

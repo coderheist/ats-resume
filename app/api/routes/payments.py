@@ -10,12 +10,13 @@ wrapper and both signature-verification methods.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.config import entitlement_for
+from app.config import DEFAULT_CURRENCY, SUPPORTED_CURRENCIES, entitlement_for, price_for
 from app.core.auth.dependencies import AuthenticatedUser, get_current_user
 from app.core.billing.razorpay_client import (
     BillingNotConfiguredError, PaymentVerificationError,
@@ -28,8 +29,12 @@ from app.schemas.api_models import CheckoutRequest, VerifyPaymentRequest
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
-_BILLING_CYCLE_FIELD = {"monthly": "monthly_price_usd", "annual": "annual_price_usd"}
 _BILLING_CYCLE_DAYS = {"monthly": 30, "annual": 365}
+
+# Razorpay's floor for an order, in the smallest currency unit.
+MIN_ORDER_AMOUNT = 100
+
+_log = logging.getLogger(__name__)
 
 
 def _activate_subscription(db: Session, user: User, tier_id: str, billing_cycle: str) -> None:
@@ -56,15 +61,26 @@ def create_order_route(
     resulting subscription to. Returns the Razorpay order id and the
     PUBLIC key_id (never the secret) for the frontend to open Razorpay's
     Checkout widget with."""
-    if request.billing_cycle not in _BILLING_CYCLE_FIELD:
+    if request.billing_cycle not in _BILLING_CYCLE_DAYS:
         raise HTTPException(status_code=400, detail="billing_cycle must be 'monthly' or 'annual'.")
+
+    currency = (request.currency or DEFAULT_CURRENCY).upper()
+    if currency not in SUPPORTED_CURRENCIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported currency '{request.currency}'. Supported: {', '.join(SUPPORTED_CURRENCIES)}.",
+        )
 
     try:
         tier = entitlement_for(request.tier)
     except KeyError:
         raise HTTPException(status_code=400, detail=f"Unknown tier '{request.tier}'.") from None
 
-    price = getattr(tier, _BILLING_CYCLE_FIELD[request.billing_cycle])
+    # The listed price in the requested currency -- never a conversion of
+    # the USD one. INR is priced separately in config.py, so a customer is
+    # charged the number the pricing page showed them rather than whatever
+    # an exchange rate produced in between.
+    price = price_for(tier, request.billing_cycle, currency)
     if price is None:
         raise HTTPException(status_code=400, detail=f"The '{tier.name}' plan doesn't offer {request.billing_cycle} billing.")
     if price <= 0:
@@ -77,24 +93,54 @@ def create_order_route(
     # convention exists to avoid.
     amount_smallest_unit = round(price * 100)
 
+    # Razorpay rejects anything below 100 (₹1 / $1) in the smallest unit.
+    # Every tier in config.py is comfortably above it, so this guards
+    # against a future pricing change rather than today's catalogue --
+    # and it is worth catching here because the alternative is a rejection
+    # from Razorpay's API mid-checkout, which is slower, costs a round
+    # trip, and reads as a payment outage rather than a pricing mistake.
+    if amount_smallest_unit < MIN_ORDER_AMOUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Order amount {amount_smallest_unit} is below Razorpay's minimum of "
+                f"{MIN_ORDER_AMOUNT} (smallest currency unit)."
+            ),
+        )
+
     try:
         order = create_order(
-            amount=amount_smallest_unit, currency=request.currency,
+            amount=amount_smallest_unit, currency=currency,
             receipt=f"{user.id}-{tier.id}-{request.billing_cycle}"[:40],  # Razorpay caps receipt at 40 chars
             notes={"user_id": user.id, "tier": tier.id, "billing_cycle": request.billing_cycle},
         )
     except BillingNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Anything the Razorpay call itself raises: a rejected currency,
+        # credentials that are set but wrong, a network failure, an
+        # outage. Uncaught, these surfaced as a bare 500 with a traceback
+        # and no indication to the caller of whether retrying is
+        # sensible. 502 says it accurately -- this service is fine, the
+        # upstream one did not answer -- and no Payment row is written,
+        # so a checkout that never reached Razorpay leaves nothing behind
+        # pretending it did.
+        _log.exception("Razorpay order creation failed (tier=%s, amount=%s %s)",
+                       tier.id, amount_smallest_unit, currency)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't reach the payment provider. No charge was made -- please try again.",
+        ) from exc
 
     db.add(Payment(
         user_id=user.id, tier=tier.id, billing_cycle=request.billing_cycle,
-        amount=amount_smallest_unit, currency=request.currency,
+        amount=amount_smallest_unit, currency=currency,
         razorpay_order_id=order["id"], status="created",
     ))
     db.commit()
 
     return {
-        "order_id": order["id"], "amount": amount_smallest_unit, "currency": request.currency,
+        "order_id": order["id"], "amount": amount_smallest_unit, "currency": currency,
         "key_id": get_public_key_id(), "tier": tier.id, "tier_name": tier.name,
     }
 
