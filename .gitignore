@@ -1,5 +1,13 @@
 # Environment
+#
+# The bare `.env` pattern is an exact match, so it covered .env itself and
+# nothing else -- a .env.bak, .env.local or .env.production sitting next to
+# it would have shown up as an untracked file holding live credentials, one
+# `git add -A` away from a public repository. The wildcard closes that;
+# the negation keeps the committed, placeholder-only examples tracked.
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/

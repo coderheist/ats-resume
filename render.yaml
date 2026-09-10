@@ -1,0 +1,116 @@
+# Render Blueprint for the FastAPI backend.
+#
+# The API is deliberately a separate service from the frontend: Vercel
+# builds only the static site (see the root vercel.json -- there is no
+# api/ directory and no functions config), so nothing there serves this
+# app. Both the rate limiter and the voice session store are per-process
+# in-memory state, which is also why this is a long-running container
+# rather than serverless functions -- see docs/DEPLOY-FREE-TIER.md.
+#
+# To use: Render Dashboard -> New -> Blueprint -> point at this repo.
+# Every `sync: false` variable is left blank on purpose and must be
+# filled in on the service's Environment page; secrets do not belong in
+# a committed file.
+
+services:
+  - type: web
+    name: resume-optimizer-api
+    runtime: docker
+    plan: free
+    # Keep this near the Supabase project. Cross-region round trips are
+    # paid on every query, and this app makes several per request.
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # /health is unauthenticated and not rate limited, so it is safe to
+    # poll. Note it does NOT check the database -- it returns 200 even
+    # when Postgres is unreachable, so a green health check here means
+    # "the process is up", not "the app can serve requests".
+    healthCheckPath: /health
+
+    # Migrations run as their own step BEFORE new containers take
+    # traffic, never at application startup -- startup migrations race
+    # each other whenever more than one instance boots at once.
+    #
+    # Pre-deploy commands require a paid instance type. On the free plan
+    # this line is ignored, so run it once by hand against the same
+    # DATABASE_URL instead:
+    #
+    #   DATABASE_URL="postgresql://...?sslmode=require" alembic upgrade head
+    #
+    # This is not optional either way: app/db/session.py auto-creates
+    # tables only for SQLite. On Postgres there is no such fallback, so a
+    # deploy whose migrations never ran comes up healthy (see above) and
+    # then 500s on every account-backed route with
+    # `relation "users" does not exist`.
+    preDeployCommand: alembic upgrade head
+
+    envVars:
+      # --- Set these in the dashboard ------------------------------
+      # Supabase Session pooler (NOT Transaction mode -- this is a
+      # long-running process and SQLAlchemy expects session-level
+      # features pgbouncer's transaction mode does not provide), with
+      # ?sslmode=require. A postgres:// scheme is normalized to
+      # postgresql:// automatically; see app/db/session.py.
+      - key: DATABASE_URL
+        sync: false
+      # Full service-account JSON content, not a file path.
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      # A different secret from RAZORPAY_KEY_SECRET above -- the two
+      # sign different things and are not interchangeable.
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # --- Fixed values --------------------------------------------
+      # Exact origin match, no trailing slash: an Origin header is
+      # scheme + host + port and never carries a path, so a trailing
+      # slash here can never match what the browser actually sends.
+      # Add further origins comma-separated. Never "*" -- this API
+      # accepts Authorization headers.
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://airesumetop.vercel.app
+
+      # Render terminates TLS at its own proxy, so the peer address the
+      # app sees is that proxy and is identical for every request. Left
+      # at 0, the per-IP rate limiter collapses to a single bucket and
+      # its limit becomes a global ceiling shared by all users, who then
+      # 429 each other. 1 = exactly one proxy in front.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+
+      # TF-IDF needs no model weights. Switching to sbert requires
+      # baking them into the image -- downloading on first request puts
+      # a large cold start in front of a user-facing call.
+      - key: EMBEDDING_BACKEND
+        value: tfidf
+
+      # One provider, and Gemini is the stronger of the two available.
+      # The repo's own tiering says so -- app/core/llm/router.py rates
+      # Gemini as MEDIUM ("stronger, still inexpensive") against Groq's
+      # BASIC ("free/cheapest") -- and the model map bears it out, most
+      # sharply on deep reasoning: gemini-3.1-pro versus qwen3.6-27b.
+      # Extraction and the conversational agent likewise run
+      # gemini-3.6-flash rather than gpt-oss-120b.
+      #
+      # Nothing else needs configuring for this to be sufficient. The UI
+      # exposes no tier selector and the upload call sends no `tier`
+      # (frontend-react/src/features/upload/useResumeUpload.js), so every
+      # request resolves through active_provider() -- this variable --
+      # and never asks for the Groq or Claude tiers by name. That also
+      # means GROQ_API_KEY and ANTHROPIC_API_KEY are deliberately absent
+      # here rather than forgotten.
+      - key: LLM_PROVIDER
+        value: gemini
+
+      # Unbuffered stdout, so uvicorn's logs reach Render's log stream
+      # as they happen rather than in delayed chunks.
+      - key: PYTHONUNBUFFERED
+        value: "1"

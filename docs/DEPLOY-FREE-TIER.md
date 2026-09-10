@@ -34,7 +34,17 @@ limiter and voice session store assume a long-lived process.
 ## Step 2: Backend
 
 Deploy the root `Dockerfile` to Cloud Run, Render, Railway, or another
-long-running container platform. Set these server-side variables as needed:
+long-running container platform.
+
+For Render specifically, [`render.yaml`](../render.yaml) is a blueprint that
+declares the service and every variable below: **New -> Blueprint**, point it at
+this repository, then fill in the secrets it deliberately leaves blank. It
+already sets `TRUSTED_PROXY_HOPS=1`, which matters on any platform that
+terminates TLS at its own proxy -- left at `0` the per-IP rate limiter sees only
+that proxy, collapses to one bucket, and unrelated users start 429ing each
+other.
+
+Set these server-side variables as needed:
 
 - `DATABASE_URL`
 - `FIREBASE_SERVICE_ACCOUNT_JSON`
