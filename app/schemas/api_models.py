@@ -12,6 +12,19 @@ class JdMatchRequest(BaseModel):
 
 class StandaloneScoreRequest(BaseModel):
     resume: JsonResume
+    # The role the candidate is aiming for, e.g. "ai_engineer" -- see
+    # GET /score/roles for the accepted values. Optional and defaulted to
+    # None so every existing caller keeps the previous behaviour: the
+    # role is inferred from the resume's skills.
+    #
+    # Worth stating because it is the difference between a guess and an
+    # answer: inference depends both on how much the parser extracted and
+    # on how well a fixed tech ontology describes this person, and a
+    # sparse parse leaves several roles tied on the same handful of
+    # generic skills. Naming the role removes that entirely, and asks the
+    # more useful question anyway -- readiness for the job the candidate
+    # actually wants, not a label for the resume as it stands.
+    target_role: str | None = None
 
 
 class SuggestionsRequest(BaseModel):

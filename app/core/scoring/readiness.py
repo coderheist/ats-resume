@@ -67,9 +67,18 @@ ROLE_ONTOLOGY: dict[str, set[str]] = {
     "data_analyst": {"sql", "excel", "tableau", "python", "pandas"},
     "devops_engineer": {"docker", "kubernetes", "terraform", "aws", "ci_cd", "git"},
     "ml_engineer": {"machine_learning", "python", "tensorflow", "pytorch", "docker", "aws"},
+    # Distinct from ml_engineer: the applied/LLM side of the field, where
+    # the day job is building on top of models rather than training them.
+    # Its absence was a real gap -- an AI engineer resume had no correct
+    # label available, and with a sparse skill parse it fell all the way
+    # through to software_engineer.
+    "ai_engineer": {"machine_learning", "python", "pytorch", "tensorflow", "docker", "rest_api"},
     "cloud_engineer": {"aws", "azure", "gcp", "terraform", "docker", "kubernetes"},
     "qa_engineer": {"python", "git", "ci_cd", "agile", "sql"},
 }
+
+# Sorted so the API, and any picker built from it, have a stable order.
+AVAILABLE_ROLES: list[str] = sorted(ROLE_ONTOLOGY)
 
 WEIGHTS = {
     "structural": 0.30,
@@ -86,6 +95,7 @@ class ReadinessBreakdown:
     action_verb_density: float
     quantified_metric_density: float
     inferred_role: str | None
+    role_source: str = "inferred"  # "inferred" | "user_specified"
     skill_coverage_score: float = 1.0  # neutral (not penalized) when no role inferred
     highlight_count: int = 0
     passive_voice_count: int = 0
@@ -119,6 +129,11 @@ class ReadinessBreakdown:
         return {
             "score": round(self.overall_score() * 100, 1),
             "inferred_role": self.inferred_role,
+            # Whether the role above was stated by the caller or guessed.
+            # Without this the UI cannot tell the two apart, and "we think
+            # you are a software engineer" reads very differently from
+            # "scored against the software engineer role you picked".
+            "role_source": self.role_source,
             "structural_completeness": round(self.structural_score * 100, 1),
             "action_verb_density": round(self.action_verb_density * 100, 1),
             "quantified_metric_density": round(self.quantified_metric_density * 100, 1),
@@ -185,13 +200,35 @@ def _infer_role(resume: JsonResume) -> tuple[str | None, set[str], float]:
     """
     resume_skills = extract_canonical_skills(resume.all_text(), known_terms=list(resume.all_skill_keywords()))
 
-    best_role, best_overlap = None, 0
-    for role, expected in ROLE_ONTOLOGY.items():
-        overlap = len(expected & resume_skills)
-        if overlap > best_overlap:
-            best_role, best_overlap = role, overlap
+    # Rank by (overlap, coverage ratio, role name) rather than raw overlap
+    # alone. Two things were wrong with the raw count:
+    #
+    # 1. It ignored role size, so a 3-of-5 match lost to a 3-of-6 match
+    #    even though the former is the better fit.
+    # 2. Ties were broken by dict insertion order, silently. Because
+    #    software_engineer is declared first and its skill set is the most
+    #    generic in the ontology (python, sql and git appear on nearly
+    #    every technical resume), it won essentially every tie. A resume
+    #    where only "python" was extracted produced an eight-way tie that
+    #    always resolved to software_engineer -- which is how an AI
+    #    engineer resume came back labelled a software engineer. The real
+    #    trigger is upstream: a sparse parse yields few canonical skills,
+    #    and few skills means ties.
+    #
+    # Sorting on the role name last only makes the outcome reproducible;
+    # it is not a meaningful signal, which is exactly why a genuine tie is
+    # better resolved by the caller stating their role -- see
+    # score_standalone_readiness's target_role.
+    ranked = sorted(
+        (
+            (len(expected & resume_skills), len(expected & resume_skills) / len(expected), role)
+            for role, expected in ROLE_ONTOLOGY.items()
+        ),
+        reverse=True,
+    )
+    best_overlap, _, best_role = ranked[0]
 
-    if best_role is None:
+    if best_overlap == 0:
         # No overlap with any role in this (tech-scoped) ontology -- don't
         # guess, and don't penalize; see module docstring.
         return None, set(), 1.0
@@ -202,12 +239,46 @@ def _infer_role(resume: JsonResume) -> tuple[str | None, set[str], float]:
     return best_role, missing, coverage
 
 
-def score_standalone_readiness(resume: JsonResume) -> ReadinessBreakdown:
+def coverage_for_role(resume: JsonResume, role: str) -> tuple[set[str], float]:
+    """Skill coverage against a role the CALLER named, skipping inference.
+
+    Inference is a guess resting on two things that can each be wrong:
+    how much the parser managed to extract, and how well a fixed
+    tech-scoped ontology happens to describe this person. When someone
+    states the role they are targeting, neither matters any more -- and
+    the answer becomes more useful, since the question worth asking is
+    usually "how ready am I for the job I want" rather than "what does my
+    resume currently look like".
+    """
+    expected = ROLE_ONTOLOGY[role]
+    resume_skills = extract_canonical_skills(resume.all_text(), known_terms=list(resume.all_skill_keywords()))
+    return expected - resume_skills, len(expected & resume_skills) / len(expected)
+
+
+def score_standalone_readiness(resume: JsonResume, target_role: str | None = None) -> ReadinessBreakdown:
+    """`target_role` is the role the caller is aiming for, e.g.
+    "ai_engineer" (see AVAILABLE_ROLES). Given one, skill coverage is
+    measured against it and inference is skipped entirely; omitted, the
+    role is inferred exactly as before, so existing callers are
+    unaffected.
+
+    An unknown role raises ValueError, which the route turns into a 400.
+    Falling back to inference instead would answer a different question
+    while looking like a successful request.
+    """
     structural_score, missing_sections = _structural_check(resume)
     quality = analyze_content_quality(resume)
-    role, missing_skills, skill_coverage = _infer_role(resume)
+
+    if target_role is not None:
+        if target_role not in ROLE_ONTOLOGY:
+            raise ValueError("Unknown role '%s'." % target_role)
+        role = target_role
+        missing_skills, skill_coverage = coverage_for_role(resume, target_role)
+    else:
+        role, missing_skills, skill_coverage = _infer_role(resume)
 
     return ReadinessBreakdown(
+        role_source="user_specified" if target_role is not None else "inferred",
         structural_score=structural_score,
         action_verb_density=quality.action_verb_density,
         quantified_metric_density=quality.quantified_metric_density,

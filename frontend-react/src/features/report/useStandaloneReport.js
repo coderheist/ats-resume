@@ -19,7 +19,7 @@ export function useStandaloneReport() {
   // inline error, so it needs its own piece of state.
   const [limitDetail, setLimitDetail] = useState(null);
 
-  const run = useCallback(async (resume) => {
+  const run = useCallback(async (resume, targetRole) => {
     setStatus("loading");
     setError(null);
     setLimitDetail(null);
@@ -27,7 +27,14 @@ export function useStandaloneReport() {
     setSuggestionsError(null);
 
     try {
-      const result = await apiPost("/score/standalone", { resume });
+      // Omitted entirely rather than sent as "" when no role is chosen.
+      // The backend treats null as "infer it" but validates any string it
+      // is given, so an empty one would come back 400 -- turning the
+      // default path into an error.
+      const result = await apiPost("/score/standalone", {
+        resume,
+        ...(targetRole ? { target_role: targetRole } : {}),
+      });
       setData(result);
       setStatus("success");
     } catch (err) {

@@ -8,7 +8,7 @@ from app.core.llm.client_factory import get_client_for
 from app.core.llm.feedback_prompt import generate_feedback_summary, template_feedback_summary
 from app.core.llm.router import TaskType
 from app.core.scoring.hybrid_score import score_resume_against_jd
-from app.core.scoring.readiness import score_standalone_readiness
+from app.core.scoring.readiness import AVAILABLE_ROLES, ROLE_ONTOLOGY, score_standalone_readiness
 from app.core.scoring.screening_report import screen_resume_against_jd
 from app.core.scoring.suggestion_engine import top_suggestions
 from app.core.services.entitlement_service import check_scan_allowance, iso_utc, record_scan
@@ -50,6 +50,26 @@ def _enforce_entitlement(db: Session, user: User | None) -> None:
     })
 
 
+@router.get("/roles")
+def list_roles() -> dict:
+    """The roles /score/standalone accepts as `target_role`.
+
+    Served rather than hard-coded in the frontend so a picker cannot
+    drift out of sync with the ontology the backend actually scores
+    against -- a stale option there would be indistinguishable from a
+    working one until it returned a 400. `expected_skills` is included
+    because it is the honest explanation of what choosing a role means:
+    coverage is measured against exactly that set, and a candidate can
+    see what is being looked for.
+    """
+    return {
+        "roles": [
+            {"id": role, "label": role.replace("_", " ").title(), "expected_skills": sorted(ROLE_ONTOLOGY[role])}
+            for role in AVAILABLE_ROLES
+        ]
+    }
+
+
 @router.post("/jd-match")
 def jd_match(request: JdMatchRequest) -> dict:
     """Mode 1: score a resume against a specific job description.
@@ -72,11 +92,28 @@ def standalone(
 ) -> dict:
     """Mode 2: JD-less ATS readiness score. Public and unrestricted for
     anonymous callers, unchanged; signed-in users get their scan saved
-    to history and counted against their monthly entitlement."""
+    to history and counted against their monthly entitlement.
+
+    `target_role` (optional) scores skill coverage against a role the
+    caller names instead of one inferred from the resume -- see
+    GET /roles below for the accepted values, and the response's
+    `role_source` for which of the two produced the role it reports.
+    """
     user = _resolve_user(db, auth_user)
     _enforce_entitlement(db, user)
 
-    breakdown = score_standalone_readiness(request.resume)
+    try:
+        breakdown = score_standalone_readiness(request.resume, target_role=request.target_role)
+    except ValueError:
+        # An unrecognised role is the caller's mistake, not a server
+        # error. Naming the valid options matters more than usual here:
+        # these are internal ids ("ai_engineer"), not free text, so a
+        # rejection without the list gives no way to guess the right one.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown target_role '{request.target_role}'. Valid roles: {', '.join(AVAILABLE_ROLES)}.",
+        ) from None
+
     result = breakdown.to_xai_dict()
 
     if user:

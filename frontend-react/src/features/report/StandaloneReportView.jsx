@@ -1,4 +1,5 @@
 import { FileCheck, Layers, Lightbulb, Zap } from "lucide-react";
+import { useState } from "react";
 import { BulletList } from "../../components/BulletList";
 import { DimensionTile } from "../../components/DimensionTile";
 import { ErrorBox } from "../../components/ErrorBox";
@@ -8,12 +9,14 @@ import { ParsingLoader } from "../../components/ParsingLoader";
 import { ReportHero } from "../../components/ReportHero";
 import { ReportSkeleton } from "../../components/ReportSkeleton";
 import { RoleBadge } from "../../components/RoleBadge";
+import { RoleSelect } from "../../components/RoleSelect";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StepIndicator } from "../../components/StepIndicator";
 import { TagList } from "../../components/TagList";
 import { TopList } from "../../components/TopList";
 import { FileDropzone } from "../upload/FileDropzone";
 import { useResumeUpload } from "../upload/useResumeUpload";
+import { useRoles } from "./useRoles";
 import { useStandaloneReport } from "./useStandaloneReport";
 
 const STEPS = ["Upload resume", "Run analysis", "Report"];
@@ -21,17 +24,23 @@ const STEPS = ["Upload resume", "Run analysis", "Report"];
 export function StandaloneReportView() {
   const upload = useResumeUpload();
   const { data, suggestions, suggestionsError, status, error, limitDetail, dismissLimit, run, reset } = useStandaloneReport();
+  const roles = useRoles();
+  const [targetRole, setTargetRole] = useState("");
 
   const resume = upload.result?.resume;
 
   function handleRun() {
     if (!resume) return;
-    run(resume);
+    run(resume, targetRole);
   }
 
   function handleResumeReset() {
     upload.reset();
     reset();
+    // The role belongs to the analysis, not the session -- a different
+    // resume is a different question, so it starts from the default
+    // rather than silently inheriting the last choice.
+    setTargetRole("");
   }
 
   const tiles = data
@@ -42,6 +51,17 @@ export function StandaloneReportView() {
         { label: "Active voice", value: data.active_voice_score, accent: true },
       ]
     : [];
+
+  // Prefer the human label the roles endpoint already supplies over
+  // rendering the raw id ("ai_engineer") at the reader.
+  const roleLabel = data
+    ? roles.find((r) => r.id === data.inferred_role)?.label || data.inferred_role || "unclassified"
+    : "unclassified";
+
+  const emptyGapText =
+    data?.role_source === "user_specified"
+      ? `Your resume covers every skill expected for ${roleLabel}.`
+      : "No ontology gaps for the inferred role.";
 
   let currentStep = 1;
   if (upload.status === "success" && status === "idle") currentStep = 2;
@@ -64,6 +84,12 @@ export function StandaloneReportView() {
         </div>
       ) : (
         <div className="input-card">
+          <RoleSelect
+            roles={roles}
+            value={targetRole}
+            onChange={setTargetRole}
+            disabled={status === "loading"}
+          />
           <div className="resume-loaded-row" style={{ marginBottom: 0 }}>
             <div className="resume-loaded-info">
               <div className="resume-loaded-icon">
@@ -99,8 +125,16 @@ export function StandaloneReportView() {
             mode="readiness"
             score={data.score}
             scoreLabel="/ 100 readiness"
-            badge={<RoleBadge label={data.inferred_role || "unclassified"} />}
-            caption="Based on your current resume, with no specific job description."
+            badge={<RoleBadge label={roleLabel} />}
+            // A guessed role and a chosen one deserve different wording:
+            // "we think you're a QA engineer" is a claim the report has
+            // to stand behind, while "scored against the role you picked"
+            // is just describing what was asked for.
+            caption={
+              data.role_source === "user_specified"
+                ? `Scored against the ${roleLabel} role you selected, with no specific job description.`
+                : "Based on your current resume, with no specific job description."
+            }
           />
 
           <div className="tile-row">
@@ -123,9 +157,9 @@ export function StandaloneReportView() {
               )}
             </div>
             <div>
-              <SectionHeader icon={Zap} title="Missing skills for this role" tone="gap" />
-              <TopList items={data.missing_ontology_skills} emptyText="No ontology gaps for the inferred role.">
-                {(visible) => <TagList items={visible} kind="gap" emptyText="No ontology gaps for the inferred role." />}
+              <SectionHeader icon={Zap} title={`Missing skills for ${roleLabel}`} tone="gap" />
+              <TopList items={data.missing_ontology_skills} emptyText={emptyGapText}>
+                {(visible) => <TagList items={visible} kind="gap" emptyText={emptyGapText} />}
               </TopList>
             </div>
           </FadeUpSection>

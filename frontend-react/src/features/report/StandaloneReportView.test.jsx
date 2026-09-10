@@ -1,13 +1,29 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiPost, apiPostFile } from "../../lib/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiGet, apiPost, apiPostFile } from "../../lib/api";
 import { StandaloneReportView } from "./StandaloneReportView";
 
 vi.mock("../../lib/api", () => ({
+  apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPostFile: vi.fn(),
 }));
+
+const SAMPLE_ROLES = {
+  roles: [
+    { id: "ai_engineer", label: "Ai Engineer", expected_skills: ["machine_learning", "python"] },
+    { id: "software_engineer", label: "Software Engineer", expected_skills: ["python", "sql"] },
+  ],
+};
+
+beforeEach(() => {
+  // The role picker fetches its options on mount (useRoles). Default it
+  // to a successful, empty-ish response so every existing test keeps
+  // exercising the path it was written for rather than the
+  // list-failed-to-load fallback.
+  apiGet.mockResolvedValue(SAMPLE_ROLES);
+});
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -83,7 +99,7 @@ describe("StandaloneReportView", () => {
     await waitFor(() => screen.getByText("Run readiness score"));
     fireEvent.click(screen.getByText("Run readiness score"));
 
-    await waitFor(() => expect(screen.getByText("software_engineer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Software Engineer")).toBeInTheDocument());
     expect(screen.getByText("certifications")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Add a metric here.")).toBeInTheDocument());
   });
@@ -135,7 +151,7 @@ describe("StandaloneReportView", () => {
     await waitFor(() => screen.getByText("Run readiness score"));
     fireEvent.click(screen.getByText("Run readiness score"));
 
-    await waitFor(() => expect(screen.getByText("software_engineer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Software Engineer")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/Recommendations unavailable: suggestions down/)).toBeInTheDocument());
   });
 
@@ -157,10 +173,86 @@ describe("StandaloneReportView", () => {
     uploadResume();
     await waitFor(() => screen.getByText("Run readiness score"));
     fireEvent.click(screen.getByText("Run readiness score"));
-    await waitFor(() => expect(screen.getByText("software_engineer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Software Engineer")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Use a different resume"));
     expect(screen.getByText(/drop your resume here/i)).toBeInTheDocument();
-    expect(screen.queryByText("software_engineer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Software Engineer")).not.toBeInTheDocument();
+  });
+});
+
+describe("StandaloneReportView target role", () => {
+  it("sends target_role when one is picked", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockResolvedValueOnce({ ...SAMPLE_READINESS, inferred_role: "ai_engineer", role_source: "user_specified" })
+      .mockResolvedValueOnce(SAMPLE_SUGGESTIONS);
+
+    render(<StandaloneReportView />);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    await waitFor(() => screen.getByRole("combobox"));
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "ai_engineer" } });
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith("/score/standalone", {
+        resume: PARSED_RESUME.resume,
+        target_role: "ai_engineer",
+      }),
+    );
+  });
+
+  it("omits target_role entirely when inferring", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockResolvedValueOnce(SAMPLE_READINESS).mockResolvedValueOnce(SAMPLE_SUGGESTIONS);
+
+    render(<StandaloneReportView />);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    // Not `target_role: ""` -- the backend validates any string it is
+    // given, so an empty one would 400 and break the default path.
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith("/score/standalone", { resume: PARSED_RESUME.resume }),
+    );
+  });
+
+  it("says the role was chosen, not guessed, when the caller picked it", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockResolvedValueOnce({ ...SAMPLE_READINESS, inferred_role: "ai_engineer", role_source: "user_specified" })
+      .mockResolvedValueOnce(SAMPLE_SUGGESTIONS);
+
+    render(<StandaloneReportView />);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    await waitFor(() => expect(screen.getByText(/role you selected/i)).toBeInTheDocument());
+  });
+
+  it("keeps the guessed wording when the role was inferred", async () => {
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+    apiPost.mockResolvedValueOnce({ ...SAMPLE_READINESS, role_source: "inferred" })
+      .mockResolvedValueOnce(SAMPLE_SUGGESTIONS);
+
+    render(<StandaloneReportView />);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+    fireEvent.click(screen.getByText("Run readiness score"));
+
+    await waitFor(() => expect(screen.getByText(/Based on your current resume/i)).toBeInTheDocument());
+  });
+
+  it("hides the picker when the role list fails to load", async () => {
+    apiGet.mockRejectedValue(new Error("roles down"));
+    apiPostFile.mockResolvedValue(PARSED_RESUME);
+
+    render(<StandaloneReportView />);
+    uploadResume();
+    await waitFor(() => screen.getByText("Run readiness score"));
+
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 });
