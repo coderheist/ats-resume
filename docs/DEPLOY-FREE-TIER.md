@@ -23,7 +23,27 @@ limiter and voice session store assume a long-lived process.
    create extension if not exists vector;
    ```
 
-3. Use the Session pooler connection string with `?sslmode=require`.
+3. Dashboard -> **Connect** -> **Session pooler** (not Transaction: this is a
+   long-running process, and SQLAlchemy expects session-level features that
+   pgbouncer's transaction mode does not provide). The string looks like:
+
+   ```text
+   postgres://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres
+   ```
+
+   Two things Supabase does **not** do for you:
+
+   - **`?sslmode=require` is not included** -- append it yourself. Supabase
+     requires SSL and psycopg2 would negotiate it anyway under its default
+     `sslmode=prefer`, so this is about making the requirement explicit rather
+     than leaving it to a default that could silently downgrade.
+   - **The password is not URL-encoded.** If it contains `@`, `:`, `/`, `#` or
+     `?`, percent-encode it or the URL parses into the wrong host and the
+     failure looks like a DNS or auth error rather than a quoting one.
+
+   The scheme Supabase hands you is `postgres://`, which SQLAlchemy 2.x no
+   longer accepts. `app/db/session.py` rewrites it to `postgresql://` on
+   startup, so either form works here -- paste it as given.
 4. Apply migrations from the repository root:
 
    ```bash

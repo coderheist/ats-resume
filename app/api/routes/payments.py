@@ -162,19 +162,30 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)) -> d
     payload = json.loads(raw_body)
     event = payload.get("event")
 
-    if event == "payment.captured":
-        entity = payload["payload"]["payment"]["entity"]
-        payment = db.query(Payment).filter(Payment.razorpay_order_id == entity["order_id"]).first()
+    # Every lookup into the payload is a .get() chain rather than
+    # subscripting. The shape below is what Razorpay documents, but a
+    # webhook body is still a remote party's JSON, and indexing it meant
+    # a missing key raised KeyError -> uncaught 500. That is a bad
+    # failure specifically here: Razorpay treats a 5xx as "delivery
+    # failed" and RETRIES, so one payload we cannot read becomes a
+    # retry loop against an endpoint that will never succeed, while a
+    # genuine payment sits unrecorded. An order_id we cannot find is a
+    # webhook we have nothing to do about -- acknowledge it and stop,
+    # exactly as the unknown-event case below already did.
+    entity = ((payload.get("payload") or {}).get("payment") or {}).get("entity") or {}
+    order_id = entity.get("order_id")
+
+    if event == "payment.captured" and order_id:
+        payment = db.query(Payment).filter(Payment.razorpay_order_id == order_id).first()
         if payment and payment.status != "paid":  # idempotent -- see /verify's docstring
-            payment.razorpay_payment_id = entity["id"]
+            payment.razorpay_payment_id = entity.get("id")
             payment.status = "paid"
             user = db.query(User).filter(User.id == payment.user_id).first()
             if user:
                 _activate_subscription(db, user, payment.tier, payment.billing_cycle)
             db.commit()
-    elif event == "payment.failed":
-        entity = payload["payload"]["payment"]["entity"]
-        payment = db.query(Payment).filter(Payment.razorpay_order_id == entity.get("order_id")).first()
+    elif event == "payment.failed" and order_id:
+        payment = db.query(Payment).filter(Payment.razorpay_order_id == order_id).first()
         if payment and payment.status == "created":
             payment.status = "failed"
             db.commit()

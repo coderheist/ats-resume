@@ -50,12 +50,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import logging
 from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from pydantic import ValidationError
 
-from app.core.llm.router import PROVIDER_TO_TIER, Provider, TaskType, Tier, active_provider, provider_for_tier
+from app.core.llm.router import (
+    PROVIDER_TO_TIER, Provider, TaskType, Tier, active_provider, provider_for_tier, route,
+)
+
+_log = logging.getLogger(__name__)
 from app.core.parsing.parse_confidence import HIGH_CONFIDENCE_THRESHOLD, compute_confidence
 from app.schemas.json_resume import JsonResume
 
@@ -137,6 +142,24 @@ def _extract_via_llm(raw_text: str, provider: Provider) -> JsonResume | None:
         parsed = json.loads(_strip_code_fence(text))
         return JsonResume.model_validate(parsed)
     except Exception:  # noqa: BLE001 -- any failure here just falls back to heuristic
+        # Log before swallowing. Falling back is deliberate (see this
+        # function's docstring), but the exception used to be discarded
+        # without a trace -- while the warning shown to the user said
+        # "see server logs", pointing at logs guaranteed to be empty.
+        # That collapses every LLM-side failure into one indistinguishable
+        # symptom: a wrong or expired API key, a model id the provider has
+        # retired, a rate limit, a network blip and a malformed JSON reply
+        # all surface identically as "extraction quality may be lower than
+        # ideal", while the app keeps serving heuristic parses as though
+        # nothing were wrong. Which of those it was is the entire question
+        # being asked, so exc_info keeps the traceback.
+        _log.warning(
+            "LLM resume extraction failed (provider=%s, model=%s) -- falling back to the "
+            "heuristic parse.",
+            provider.value,
+            route(TaskType.RESUME_EXTRACTION, provider=provider),
+            exc_info=True,
+        )
         return None
 
 

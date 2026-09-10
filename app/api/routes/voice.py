@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter
 
 from app.core.scoring.hybrid_score import score_resume_against_jd
@@ -13,7 +15,33 @@ router = APIRouter(prefix="/voice", tags=["voice-agent"])
 
 # In-memory session store for this scaffold. Production: Redis, keyed by
 # session_id, with a TTL matching the voice session length.
-_SESSIONS: dict[str, dict[Slot, str]] = {}
+#
+# Two bounds until then, because `session_id` is caller-supplied and this
+# endpoint is unauthenticated -- an append-only dict keyed on arbitrary
+# client input grows for the lifetime of the process, and nothing here
+# ever removed an entry. A conversation that is simply abandoned (the
+# normal way a voice session ends) leaks too, so this does not need an
+# attacker to matter.
+SESSION_TTL_SECONDS = 60 * 30
+MAX_SESSIONS = 10_000
+
+_SESSIONS: dict[str, tuple[float, dict[Slot, str]]] = {}
+
+
+def _prune_sessions(now: float) -> None:
+    """Drop expired sessions, then oldest-first if still over the cap.
+
+    The TTL is the real mechanism; the cap is a backstop for a burst that
+    arrives faster than entries expire, so memory stays bounded by
+    MAX_SESSIONS regardless of traffic shape rather than by how well
+    behaved callers are.
+    """
+    for key in [k for k, (touched, _) in _SESSIONS.items() if now - touched > SESSION_TTL_SECONDS]:
+        del _SESSIONS[key]
+
+    if len(_SESSIONS) > MAX_SESSIONS:
+        for key, _ in sorted(_SESSIONS.items(), key=lambda kv: kv[1][0])[: len(_SESSIONS) - MAX_SESSIONS]:
+            del _SESSIONS[key]
 
 
 @router.post("/turn")
@@ -30,10 +58,24 @@ def voice_turn(request: VoiceTurnRequest) -> dict:
     speech".
     """
     slots = {Slot(k): v for k, v in request.extracted_slots.items()}
-    accumulated = _SESSIONS.get(request.session_id, {})
+
+    now = time.monotonic()
+    touched, accumulated = _SESSIONS.get(request.session_id, (now, {}))
+    if now - touched > SESSION_TTL_SECONDS:
+        # Expired but not yet pruned: start fresh rather than silently
+        # resuming a conversation the caller abandoned half an hour ago.
+        accumulated = {}
 
     decision = run_turn(slots, accumulated)
-    _SESSIONS[request.session_id] = decision.filled_slots
+    # The timestamp is refreshed on every turn, so the TTL measures
+    # silence rather than total conversation length -- an active session
+    # is never evicted mid-conversation.
+    _SESSIONS[request.session_id] = (now, decision.filled_slots)
+
+    # Pruned AFTER storing, so MAX_SESSIONS is a real ceiling. Pruning
+    # first left the store at MAX_SESSIONS and then added this turn's
+    # entry on top, so the bound was quietly off by one on every request.
+    _prune_sessions(now)
 
     if decision.action == NextAction.ASK_CLARIFYING_QUESTION:
         return {

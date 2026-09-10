@@ -264,3 +264,77 @@ class TestWebhook:
         assert resp.status_code == 200
         payment = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_will_fail").first()
         assert payment.status == "failed"
+
+
+class TestWebhookMalformedPayloads:
+    """
+    A signed webhook whose body doesn't match the documented shape must
+    still be acknowledged, not crash.
+
+    Every payload lookup used to be a subscript, so a missing key raised
+    KeyError and became an uncaught 500 -- which is the worst possible
+    response here specifically. Razorpay reads 5xx as "delivery failed"
+    and retries, so a single unreadable payload turns into a retry loop
+    against an endpoint that can never succeed. Acknowledging is correct:
+    an order_id we can't find is a webhook we have nothing to do about,
+    which is how the unknown-event case already behaved.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _billing_env(self, monkeypatch):
+        monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
+        monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
+        monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "webhook_secret_fake")
+
+    def _send(self, client, payload):
+        raw_body = json.dumps(payload).encode()
+        return client.post(
+            "/payments/webhook",
+            content=raw_body,
+            headers={
+                "X-Razorpay-Signature": _sign_webhook(raw_body, "webhook_secret_fake"),
+                "Content-Type": "application/json",
+            },
+        )
+
+    @pytest.mark.parametrize("payload", [
+        {"event": "payment.captured"},
+        {"event": "payment.captured", "payload": {}},
+        {"event": "payment.captured", "payload": {"payment": {}}},
+        {"event": "payment.captured", "payload": {"payment": {"entity": {}}}},
+        {"event": "payment.captured", "payload": {"payment": {"entity": {"id": "pay_1"}}}},
+        {"event": "payment.failed", "payload": {"payment": {"entity": {"id": "pay_1"}}}},
+        {"event": "payment.captured", "payload": {"payment": None}},
+        {"event": "payment.captured", "payload": None},
+    ], ids=lambda p: str(p)[:48])
+    def test_malformed_payload_is_acknowledged_not_a_500(self, client, payload):
+        assert self._send(client, payload).status_code == 200
+
+    def test_unknown_order_id_is_acknowledged(self, client):
+        resp = self._send(client, {
+            "event": "payment.captured",
+            "payload": {"payment": {"entity": {"id": "pay_x", "order_id": "order_never_created"}}},
+        })
+        assert resp.status_code == 200
+
+    def test_a_well_formed_payload_still_activates(self, client, db_session):
+        """The hardening must not have broken the path that matters."""
+        from app.core.auth.dependencies import AuthenticatedUser
+        from app.core.services.user_service import get_or_create_user
+
+        user = get_or_create_user(db_session, AuthenticatedUser(uid="test-uid", email="j@example.com", name="J"))
+        db_session.add(Payment(
+            user_id=user.id, tier="pro", billing_cycle="monthly", amount=2900,
+            currency="USD", razorpay_order_id="order_hardening_1", status="created",
+        ))
+        db_session.commit()
+
+        resp = self._send(client, {
+            "event": "payment.captured",
+            "payload": {"payment": {"entity": {"id": "pay_h1", "order_id": "order_hardening_1"}}},
+        })
+
+        assert resp.status_code == 200
+        payment = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_hardening_1").first()
+        assert payment.status == "paid"
+        assert payment.razorpay_payment_id == "pay_h1"

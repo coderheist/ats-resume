@@ -52,7 +52,32 @@ class TfidfEmbeddingProvider(EmbeddingProvider):
         self._vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), use_idf=False)
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        matrix = self._vectorizer.fit_transform(texts)
+        try:
+            matrix = self._vectorizer.fit_transform(texts)
+        except ValueError as exc:
+            # sklearn raises "empty vocabulary; perhaps the documents only
+            # contain stop words" when NOTHING survives tokenizing and
+            # stop-word removal across every text in the call. Since both
+            # documents are fitted together, this needs the resume AND the
+            # JD to be degenerate at once -- but that pair is a normal
+            # product state, not a malformed request: /resume/parse-file
+            # returns `resume: {}` for a scanned or image-only PDF, which
+            # its own docstring calls an expected outcome, and a JD that is
+            # blank or all stop words is one distracted paste away. The
+            # result was an uncaught 500 from /score/jd-match and
+            # /score/full-report -- the endpoint the product UI actually
+            # calls -- rather than a score.
+            #
+            # Zero vectors are the honest answer: there is no lexical
+            # overlap to measure because there are no terms. cosine_
+            # similarity() below already returns 0.0 for a zero-norm
+            # vector, so this flows through the rest of the pipeline as
+            # "0% semantic match" and the caller still gets a scored
+            # response explaining itself, which is what every other
+            # degenerate-input path in this app does too.
+            if "empty vocabulary" not in str(exc):
+                raise  # a different ValueError -- don't swallow it
+            return np.zeros((len(texts), 1))
         return matrix.toarray()
 
 

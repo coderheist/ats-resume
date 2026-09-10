@@ -51,10 +51,34 @@ AUTH_HEADERS = {"Authorization": "Bearer fake-token"}
 
 
 class TestAuthNotConfigured:
+    @pytest.fixture(autouse=True)
+    def _firebase_unconfigured(self, monkeypatch):
+        """Create the unconfigured state instead of assuming it.
+
+        This used to rely on FIREBASE_SERVICE_ACCOUNT_JSON simply not
+        being set "in this test environment" -- but app/__init__.py calls
+        load_dotenv() on import, so a developer with a real .env (i.e.
+        anyone who has run the app locally) had the variable populated and
+        this test failed for them and only them. A test whose result
+        depends on the machine it runs on reports nothing useful: green in
+        CI, red locally, and no signal either way about the behaviour it
+        claims to cover.
+
+        reset_for_testing() clears firebase_auth's cached app and
+        init-attempted flag, which otherwise persist across tests in the
+        same process and would let an earlier successful init leak in.
+        """
+        from app.core.auth import firebase_auth
+
+        monkeypatch.delenv("FIREBASE_SERVICE_ACCOUNT_JSON", raising=False)
+        firebase_auth.reset_for_testing()
+        yield
+        firebase_auth.reset_for_testing()
+
     def test_me_returns_503_when_firebase_not_configured(self, client):
-        """No FIREBASE_SERVICE_ACCOUNT_JSON in this test environment --
-        verify_firebase_token raises AuthNotConfiguredError for real, no
-        mocking needed to exercise this specific path."""
+        """verify_firebase_token raises AuthNotConfiguredError for real --
+        no mocking needed to exercise this path, just a guaranteed-absent
+        service account (see the fixture above)."""
         resp = client.get("/auth/me", headers=AUTH_HEADERS)
         assert resp.status_code == 503
 
