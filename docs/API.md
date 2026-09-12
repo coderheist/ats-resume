@@ -316,10 +316,19 @@ since scoring is computed locally and is identical on every tier.
 Allowance is checked before the model call and recorded only after it
 succeeds, so a failed request never spends a rewrite.
 
+A reply that isn't valid JSON is retried exactly once, with the bad reply
+handed back to the model and a short correction — smaller/cheaper models
+occasionally wrap their answer in a stray sentence despite being told not
+to, and one corrective retry resolves that far more reliably than none. A
+client-side failure (network error, invalid key, rate limit) is never
+retried — only a malformed *reply* is. `502` means both attempts failed to
+produce parseable JSON, or the client raised outright.
+
 **Status codes:** `400` no bullets, or more than 12 · `401` no account · `429`
 rewrite allowance spent this period (`detail.error ==
 "rewrite_limit_reached"`, same shape as the scan limiter below) · `502` the
-model returned nothing usable · `503` no LLM provider configured
+model returned nothing usable, even after one corrective retry · `503` no
+LLM provider configured
 
 ---
 

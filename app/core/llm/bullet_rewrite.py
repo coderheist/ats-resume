@@ -117,6 +117,20 @@ def build_rewrite_messages(
     return [{"role": "user", "content": "\n\n".join(parts)}]
 
 
+class UnparsableRewriteError(ValueError):
+    """Raised by _extract_json when the model's reply has no recoverable
+    JSON object in it.
+
+    A distinct type (rather than a bare ValueError) so rewrite_bullets can
+    catch specifically this -- a real JSON-parsing failure worth one
+    corrective retry -- without also swallowing a json.JSONDecodeError
+    thrown mid-retry for an unrelated reason, or masking a bug in the
+    calling code that happens to raise ValueError for some other cause.
+    json.JSONDecodeError already subclasses ValueError, so both failure
+    shapes this module can produce are caught by one except clause.
+    """
+
+
 def _extract_json(text: str) -> dict:
     """Models occasionally wrap JSON in a ```json fence or a sentence of
     preamble despite being told not to. Strip the common cases rather
@@ -129,7 +143,7 @@ def _extract_json(text: str) -> dict:
         text = fenced.group(1).strip()
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end == -1 or end < start:
-        raise ValueError("The rewrite model returned no JSON object.")
+        raise UnparsableRewriteError("The rewrite model returned no JSON object.")
     return json.loads(text[start : end + 1])
 
 
@@ -158,6 +172,30 @@ def _coerce(payload: dict, originals: list[str]) -> list[RewrittenBullet]:
     return out
 
 
+_RETRY_NUDGE = (
+    "That response was not a single valid JSON object, so it could not be used. "
+    "Reply again with ONLY the JSON object described above -- no markdown fence, "
+    "no prose before or after it, no explanation."
+)
+
+
+def _call_and_extract_text(client: LLMClient, *, model: str, system: str, messages: list[dict]) -> str:
+    """One model call: send it, log its cost, and pull the text block back
+    out. Raised errors from the client itself (auth, network, rate limit)
+    propagate unchanged -- those are not what the retry in rewrite_bullets
+    is for; see its docstring."""
+    response = client.create_message(model=model, system=system, messages=messages, max_tokens=1600)
+
+    if "usage" in response:
+        from app.core.llm.token_pricing import _infer_provider_from_model, record_llm_usage
+        record_llm_usage(model, response["usage"], provider=_infer_provider_from_model(model))
+
+    for block in response.get("content", []):
+        if block.get("type") == "text":
+            return block["text"]
+    return ""
+
+
 def rewrite_bullets(
     client: LLMClient,
     bullets: list[str],
@@ -172,9 +210,26 @@ def rewrite_bullets(
 
     `task` defaults to BULLET_REWRITE but is passed in by the route so a
     Free-tier request can be served by the cheaper model
-    (app/core/llm/tier_routing.py decides which). Raises whatever the
-    client raises; the route is responsible for turning that into a 502
-    rather than leaking a provider error to the candidate.
+    (app/core/llm/tier_routing.py decides which).
+
+    Retries exactly once, and only for one specific failure: the model
+    answered, but what it said isn't a JSON object that parses -- a
+    smaller/cheaper model occasionally wraps its answer in a stray
+    sentence or a markdown fence despite the system prompt's "no prose"
+    instruction. The retry hands that exact bad reply back to the model as
+    an assistant turn, with a short correction, rather than repeating the
+    original request and hoping for different luck -- concrete feedback on
+    what was wrong gets a valid reply far more reliably than a blind
+    resend, and it costs one extra call only on the failure path, not on
+    every request.
+
+    Deliberately NOT retried: an exception raised by the client itself
+    (network error, rate limit, invalid API key, upstream 5xx). Those are
+    provider/infrastructure failures, not "the model said something odd"
+    -- retrying them risks hammering an already-failing or already
+    rate-limited API, and the caller (the /resume/rewrite-bullets route)
+    is what decides how to surface that to the user (a 502, allowance
+    left untouched). They propagate unchanged, exactly as before.
     """
     cleaned = [b.strip()[:MAX_BULLET_CHARS] for b in bullets if b and b.strip()]
     if not cleaned:
@@ -182,25 +237,23 @@ def rewrite_bullets(
     cleaned = cleaned[:MAX_BULLETS_PER_REQUEST]
 
     resolved_model = model or route(task)
-    response = client.create_message(
-        model=resolved_model,
-        system=REWRITE_SYSTEM,
-        messages=build_rewrite_messages(cleaned, role_title=role_title, company=company, jd_text=jd_text),
-        # Generous relative to the input: the rewrites are longer than the
-        # originals by design, and each carries a metric_hint alongside it.
-        max_tokens=1600,
-    )
+    first_messages = build_rewrite_messages(cleaned, role_title=role_title, company=company, jd_text=jd_text)
 
-    if "usage" in response:
-        from app.core.llm.token_pricing import _infer_provider_from_model, record_llm_usage
-        record_llm_usage(
-            resolved_model, response["usage"],
-            provider=_infer_provider_from_model(resolved_model),
-        )
+    text = _call_and_extract_text(client, model=resolved_model, system=REWRITE_SYSTEM, messages=first_messages)
+    try:
+        payload = _extract_json(text)
+    except ValueError:
+        retry_messages = [
+            *first_messages,
+            {"role": "assistant", "content": text},
+            {"role": "user", "content": _RETRY_NUDGE},
+        ]
+        # No inner try/except here: if the retry also fails to parse, that
+        # ValueError is the one that should reach the route -- one
+        # corrective attempt is the policy, not a loop, so a model that
+        # cannot produce valid JSON twice in a row is a real failure to
+        # report, not something to keep hammering.
+        text = _call_and_extract_text(client, model=resolved_model, system=REWRITE_SYSTEM, messages=retry_messages)
+        payload = _extract_json(text)
 
-    text = ""
-    for block in response.get("content", []):
-        if block.get("type") == "text":
-            text = block["text"]
-            break
-    return _coerce(_extract_json(text), cleaned)
+    return _coerce(payload, cleaned)

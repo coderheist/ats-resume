@@ -284,3 +284,90 @@ class TestBulletRewriteHonesty:
         from app.core.llm.bullet_rewrite import _extract_json
         with pytest.raises(ValueError):
             _extract_json("I'm sorry, I can't help with that.")
+
+
+class _ScriptedClient:
+    """A minimal LLMClient stand-in whose create_message returns (or
+    raises) one scripted result per call, in order, so a test can assert
+    exactly how many times the model was actually called and see what
+    each call's messages contained.
+    """
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def create_message(self, *, model, system, messages, tools=None, max_tokens=1024):
+        self.calls.append({"model": model, "system": system, "messages": messages})
+        if not self.script:
+            raise AssertionError("create_message called more times than scripted")
+        outcome = self.script.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"content": [{"type": "text", "text": outcome}]}
+
+
+VALID_REPLY = '{"bullets": [{"original": "x", "rewritten": "Owned x end to end.", "needs_metric": false, "metric_hint": ""}]}'
+
+
+class TestRewriteRetriesOnceOnUnparsableReply:
+    """The behaviour added after a real, unreproduced 502 in production
+    turned up a live bug (a duplicated LLM_PROVIDER env line silently
+    routing every call to the wrong provider) but no defect in the retry
+    logic itself. This still closes a real gap: a smaller/cheaper model
+    occasionally wraps its answer in a stray sentence despite being told
+    not to, and one corrective retry is far more reliable than none."""
+
+    def test_a_malformed_first_reply_is_corrected_by_one_retry(self):
+        from app.core.llm.bullet_rewrite import rewrite_bullets
+
+        client = _ScriptedClient(["Sure! Here is the answer you wanted.", VALID_REPLY])
+        result = rewrite_bullets(client, ["Responsible for x."], model="fake-model")
+
+        assert len(client.calls) == 2
+        assert result[0].rewritten == "Owned x end to end."
+
+        # The retry must hand the model concrete feedback, not just repeat
+        # the same request and hope for different luck: the bad reply goes
+        # back in as an assistant turn, and a plain corrective instruction
+        # follows it as a new user turn.
+        retry_messages = client.calls[1]["messages"]
+        assert retry_messages[-2] == {"role": "assistant", "content": "Sure! Here is the answer you wanted."}
+        assert retry_messages[-1]["role"] == "user"
+        assert "JSON" in retry_messages[-1]["content"]
+
+    def test_two_bad_replies_in_a_row_raise_rather_than_retry_again(self):
+        """One corrective attempt is the policy, not a loop -- a model
+        that cannot produce valid JSON twice in a row is a real failure
+        to report to the route (which turns it into a 502 and leaves the
+        allowance untouched), not something to keep hammering."""
+        from app.core.llm.bullet_rewrite import rewrite_bullets
+
+        client = _ScriptedClient(["nope", "still not json"])
+        with pytest.raises(ValueError):
+            rewrite_bullets(client, ["Responsible for x."], model="fake-model")
+
+        assert len(client.calls) == 2, "must not retry more than once"
+
+    def test_a_client_side_error_is_never_retried(self):
+        """A network error, an invalid key, a rate limit -- these are
+        provider/infrastructure failures, not 'the model said something
+        odd', and retrying them risks hammering an already-failing or
+        already-rate-limited API. They must propagate on the first
+        attempt with no retry."""
+        from app.core.llm.bullet_rewrite import rewrite_bullets
+
+        client = _ScriptedClient([RuntimeError("upstream 429")])
+        with pytest.raises(RuntimeError, match="upstream 429"):
+            rewrite_bullets(client, ["Responsible for x."], model="fake-model")
+
+        assert len(client.calls) == 1
+
+    def test_a_clean_first_reply_needs_no_retry(self):
+        from app.core.llm.bullet_rewrite import rewrite_bullets
+
+        client = _ScriptedClient([VALID_REPLY])
+        result = rewrite_bullets(client, ["Responsible for x."], model="fake-model")
+
+        assert len(client.calls) == 1
+        assert result[0].rewritten == "Owned x end to end."
