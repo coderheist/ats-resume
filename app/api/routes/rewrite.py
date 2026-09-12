@@ -30,7 +30,6 @@ from app.core.services.entitlement_service import (
 )
 from app.core.services.user_service import get_or_create_user
 from app.config import entitlement_for
-from app.db.models import Subscription
 from app.db.session import get_db
 from app.schemas.api_models import RewriteBulletsRequest
 
@@ -84,8 +83,17 @@ def rewrite_bullets_route(
             "resets_at": iso_utc(check.resets_at) if check.resets_at else None,
         })
 
-    subscription = db.query(Subscription).filter(Subscription.user_id == user.id).first()
-    tier_id = subscription.tier if subscription and subscription.active else "free"
+    # Reuses check.tier rather than re-deriving it from Subscription here.
+    # An earlier version of this route did re-derive it, with
+    # `subscription.active` as the only test -- the same bug fixed in
+    # entitlement_service.py's _is_pass_live: nothing ever flips `active`
+    # back off once a pass's renews_at passes, so that check kept
+    # reporting an expired pass's tier forever. check_rewrite_allowance
+    # above already resolved the correct, expiry-aware tier_id; deriving
+    # it a second time here was how the two could disagree -- an expired
+    # user correctly capped at Free's allowance, but still silently
+    # routed to the paid tier's better rewrite model.
+    tier_id = check.tier
     try:
         tier = entitlement_for(tier_id)
     except KeyError:

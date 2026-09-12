@@ -89,13 +89,20 @@ class TestPassPeriodWindow:
         assert start.month == 1 and end.month == 2
 
     def test_window_length_always_matches_the_tier_that_was_sold(self):
+        bought = datetime(2026, 5, 20)
         for tier_id in ("boost", "pro", "pro_season"):
             tier = entitlement_for(tier_id)
             subscription = Subscription(
                 user_id="u1", tier=tier_id, active=True,
-                renews_at=datetime(2026, 5, 20) + timedelta(days=tier.duration_days),
+                renews_at=bought + timedelta(days=tier.duration_days),
             )
-            start, end = period_bounds(tier, subscription)
+            # `now` pinned inside the pass, not left to default to the
+            # real wall clock: with the pass live/expired check in place,
+            # an unpinned `now` on a real date past 2026-05-20 would make
+            # every one of these already-expired, which is exactly the
+            # condition under test elsewhere -- this test is specifically
+            # about a still-live pass's window length.
+            start, end = period_bounds(tier, subscription, now=bought + timedelta(hours=1))
             assert (end - start).days == tier.duration_days, tier_id
 
     def test_free_tier_falls_back_to_the_calendar_month(self):
@@ -371,3 +378,126 @@ class TestRewriteRetriesOnceOnUnparsableReply:
 
         assert len(client.calls) == 1
         assert result[0].rewritten == "Owned x end to end."
+
+
+class TestExpiredPassFallsBackToFree:
+    """Regression coverage for a bug found by manual reproduction:
+    Subscription.active is set True at purchase (payments.py) and never
+    flipped back off by anything in this codebase -- no cron job, no
+    lazy-expiry write-back. Before this fix, a subscription whose pass
+    had genuinely ended kept being treated as a live paid tier forever,
+    counted against a window frozen at the pass's own expiry instant.
+    Reproduced directly: a fully-spent 7-day Boost pass, checked 70 days
+    after it ended, reported allowed=True/tier=boost with `used` frozen
+    at its pass-week count -- any usage recorded after the real expiry
+    fell outside that dead window and was never counted at all.
+    """
+
+    def _make_user_with_expired_pass(self, db_session, tier_id, days_since_expiry, scans_used_during_pass=0):
+        import uuid
+        from app.config import entitlement_for
+        from app.db.models import Subscription, User, UsageLog
+
+        user = User(id=str(uuid.uuid4()), firebase_uid=f"fb-{uuid.uuid4()}", email="x@example.com")
+        db_session.add(user)
+        db_session.commit()
+
+        tier = entitlement_for(tier_id)
+        bought = datetime.utcnow() - timedelta(days=tier.duration_days + days_since_expiry)
+        renews_at = bought + timedelta(days=tier.duration_days)
+        db_session.add(Subscription(user_id=user.id, tier=tier_id, active=True, renews_at=renews_at))
+        for i in range(scans_used_during_pass):
+            db_session.add(UsageLog(user_id=user.id, action="jd_match_scan", created_at=bought + timedelta(hours=i)))
+        db_session.commit()
+        return user
+
+    def test_a_pass_that_ended_long_ago_falls_back_to_free_not_stuck_on_the_old_tier(self, db_session):
+        from app.core.services.entitlement_service import check_scan_allowance
+        user = self._make_user_with_expired_pass(db_session, "boost", days_since_expiry=70, scans_used_during_pass=10)
+
+        check = check_scan_allowance(db_session, user)
+
+        assert check.tier == "free", "an expired Boost pass must not still report as 'boost'"
+        assert check.limit == 5, "must be checked against Free's own allowance, not Boost's"
+        assert check.used == 0, "this month's real Free usage, not a frozen count from the dead pass"
+        assert check.allowed is True
+
+    def test_a_fully_spent_expired_pass_does_not_lock_the_user_out_forever(self, db_session):
+        """Before the fix: a buyer who used their whole pass during its
+        real week stayed permanently locked out afterwards, because
+        `used` was frozen at the limit inside a window that could never
+        advance. They must instead get their Free-tier allowance back."""
+        from app.core.services.entitlement_service import check_scan_allowance
+        from app.config import B2C_TIERS
+        # days_since_expiry has to push the purchase into a PRIOR calendar
+        # month, not just past the pass's own expiry -- otherwise the old
+        # usage logs land inside the current month and get correctly
+        # counted against the fresh Free-tier allowance too, which is
+        # right behaviour but makes a same-month `days_since_expiry` the
+        # wrong choice for isolating "does an old pass's usage keep
+        # counting against you forever" from "did you also use Free's
+        # monthly allowance up this month".
+        user = self._make_user_with_expired_pass(
+            db_session, "boost", days_since_expiry=40, scans_used_during_pass=B2C_TIERS["boost"].jd_match_scans,
+        )
+
+        check = check_scan_allowance(db_session, user)
+
+        assert check.allowed is True
+        assert check.tier == "free"
+
+    def test_usage_after_expiry_is_actually_counted_not_dropped_into_a_dead_window(self, db_session):
+        """Before the fix, any scan recorded after the pass's own expiry
+        fell outside the frozen [start, end) window and was never counted
+        toward anything -- effectively unlimited, permanently free usage.
+        It must now count against the live Free-tier month instead."""
+        from app.core.services.entitlement_service import check_scan_allowance, record_scan
+        from app.config import B2C_TIERS
+        user = self._make_user_with_expired_pass(db_session, "boost", days_since_expiry=20)
+
+        for _ in range(B2C_TIERS["free"].jd_match_scans):
+            record_scan(db_session, user, "jd_match_scan")
+
+        check = check_scan_allowance(db_session, user)
+        assert check.used == B2C_TIERS["free"].jd_match_scans
+        assert check.allowed is False, "Free's own limit must actually bind once reached"
+
+    def test_a_pass_still_within_its_window_is_unaffected(self, db_session):
+        """The fix must not touch the common, correct case: a live pass
+        with time left keeps its own tier and its own allowance."""
+        from app.core.services.entitlement_service import check_scan_allowance
+        user = self._make_user_with_expired_pass(db_session, "pro", days_since_expiry=-25)  # 25 days still left
+
+        check = check_scan_allowance(db_session, user)
+
+        assert check.tier == "pro"
+        assert check.limit == 100
+
+    def test_the_rewrite_route_stops_routing_an_expired_pass_to_the_paid_model(self, client, db_session):
+        """The second half of the same bug: the route used to re-derive
+        the tier itself from `subscription.active` alone (ignoring
+        expiry) purely to pick which model quality serves the rewrite --
+        so an expired user could be correctly capped at Free's allowance
+        by check_rewrite_allowance, yet still silently routed to the
+        paid tier's better model for the one request they had left. The
+        route now reuses check.tier instead of re-deriving it."""
+        user = self._make_user_with_expired_pass(db_session, "pro", days_since_expiry=5)
+
+        captured = {}
+
+        def _capturing_get_client_for(task, **kwargs):
+            captured["task"] = task
+            return object(), "fake-model"
+
+        with _mock_auth(uid=user.firebase_uid), \
+                patch("app.api.routes.rewrite.rewrite_bullets", _fake_rewrite), \
+                patch("app.api.routes.rewrite.get_client_for", _capturing_get_client_for):
+            resp = client.post("/resume/rewrite-bullets", json={"bullets": BULLETS}, headers=AUTH_HEADERS)
+
+        assert resp.status_code == 200
+        assert resp.json()["tier"] == "free", "must report as Free, not the expired Pro tier"
+        from app.core.llm.tier_routing import rewrite_task_for_tier
+        from app.config import B2C_TIERS
+        assert captured["task"] == rewrite_task_for_tier(B2C_TIERS["free"]), (
+            "must route to Free's model quality, not Pro's, once the pass has expired"
+        )

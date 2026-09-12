@@ -53,6 +53,38 @@ def _day_start(now: datetime | None = None) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _is_pass_live(subscription: Subscription | None, now: datetime) -> bool:
+    """True if this subscription currently grants a paid tier's benefits.
+
+    Checking `subscription.active` alone is NOT enough, and this is the
+    fix for a real bug: nothing anywhere in this codebase ever flips
+    `active` back to False once a pass's `renews_at` passes -- there is no
+    cron job, no lazy-expiry write-back, nothing writes to that column
+    after `_activate_subscription` sets it True at purchase. A row bought
+    once stays `active=True` in the database forever.
+
+    Without this check, both the tier used for limits (`jd_match_scans`,
+    `ai_rewrites`, `scans_per_day`) and the window used to count usage
+    against them survive the pass's own expiry indefinitely. Concretely,
+    reproduced against a real Boost pass that "ended" 70 days ago with
+    `active` still True: every check kept reporting the buyer as a live
+    Boost subscriber against a 7-day window frozen 70 days in the past.
+    Because `_count_actions` filters `created_at < end` and `end` was that
+    frozen instant, any usage recorded *after* the real expiry fell
+    entirely outside the counted window -- so a buyer who hadn't spent
+    their whole pass got unlimited, permanently free use of the remainder
+    forever, while a buyer who HAD spent it was locked out forever,
+    instead of falling back to what they actually still have: the Free
+    plan's own allowance and its calendar-month window.
+    """
+    return (
+        subscription is not None
+        and subscription.active
+        and subscription.renews_at is not None
+        and subscription.renews_at > now
+    )
+
+
 def period_bounds(
     tier: Tier,
     subscription: Subscription | None,
@@ -66,14 +98,17 @@ def period_bounds(
     minus the duration. This is what makes a 7-day pass behave like seven
     days rather than "until the 1st".
 
-    Everything else -- the free tier, and any subscription with no expiry
-    recorded -- falls back to the calendar month. Free has no purchase
+    Everything else -- the free tier, a subscription with no expiry
+    recorded, and (critically) a subscription whose pass has already
+    expired -- falls back to the calendar month. Free has no purchase
     instant to anchor to, and a calendar month is both the least
     surprising thing to show a user ("resets on the 1st") and what this
-    app did before passes existed.
+    app did before passes existed. See `_is_pass_live`'s docstring for why
+    "expired" has to be checked here explicitly rather than trusted from
+    `subscription.active`.
     """
     now = now or datetime.utcnow()
-    if subscription is not None and subscription.active and subscription.renews_at is not None:
+    if _is_pass_live(subscription, now):
         end = subscription.renews_at
         return end - timedelta(days=tier.duration_days), end
     return _month_start(now), _next_month_start(now)
@@ -145,9 +180,24 @@ def scans_used_this_month(db: Session, user: User) -> int:
     return _count_actions(db, user, SCAN_ACTIONS, _month_start())
 
 
-def _subscription_and_tier(db: Session, user: User) -> tuple[Subscription | None, str, Tier]:
+def _subscription_and_tier(
+    db: Session, user: User, now: datetime | None = None,
+) -> tuple[Subscription | None, str, Tier]:
+    """Resolves which tier's limits currently apply.
+
+    Uses `_is_pass_live`, not just `subscription.active`, for the tier
+    decision -- the same expiry check `period_bounds` uses, and for the
+    same reason (see its docstring): `active` never gets flipped off on
+    its own, so a subscription whose pass ended stays reported as that
+    paid tier forever unless expiry is checked here explicitly. The
+    caller passes the SAME `now` to this and to `period_bounds` so the
+    tier-fallback decision and the window it's counted over can never
+    disagree about whether a given instant still falls inside a live
+    pass.
+    """
+    now = now or datetime.utcnow()
     subscription = db.query(Subscription).filter(Subscription.user_id == user.id).first()
-    tier_id = subscription.tier if subscription and subscription.active else "free"
+    tier_id = subscription.tier if _is_pass_live(subscription, now) else "free"
     try:
         tier = entitlement_for(tier_id)
     except KeyError:
@@ -187,8 +237,9 @@ def check_scan_allowance(db: Session, user: User | None) -> EntitlementCheck:
     if user is None:
         return EntitlementCheck(allowed=True, used=0, limit=None, tier="anonymous")
 
-    subscription, tier_id, tier = _subscription_and_tier(db, user)
-    start, end = period_bounds(tier, subscription)
+    now = datetime.utcnow()
+    subscription, tier_id, tier = _subscription_and_tier(db, user, now)
+    start, end = period_bounds(tier, subscription, now)
 
     if tier.scans_per_day is not None:
         today = _count_actions(db, user, SCAN_ACTIONS, _day_start())
@@ -235,8 +286,9 @@ def check_rewrite_allowance(db: Session, user: User | None) -> EntitlementCheck:
             reason="Sign in to use AI rewrites. The free plan includes 3 a month.",
         )
 
-    subscription, tier_id, tier = _subscription_and_tier(db, user)
-    start, end = period_bounds(tier, subscription)
+    now = datetime.utcnow()
+    subscription, tier_id, tier = _subscription_and_tier(db, user, now)
+    start, end = period_bounds(tier, subscription, now)
 
     if tier.ai_rewrites is None:
         return EntitlementCheck(allowed=True, used=0, limit=None, tier=tier_id)
@@ -261,8 +313,9 @@ def usage_summary(db: Session, user: User) -> dict:
     numbers -- and so adding a third metered feature later is one edit
     here rather than a hunt through route handlers.
     """
-    subscription, tier_id, tier = _subscription_and_tier(db, user)
-    start, end = period_bounds(tier, subscription)
+    now = datetime.utcnow()
+    subscription, tier_id, tier = _subscription_and_tier(db, user, now)
+    start, end = period_bounds(tier, subscription, now)
     scans_used = _count_actions(db, user, SCAN_ACTIONS, start, end)
     rewrites_used = _count_actions(db, user, (REWRITE_ACTION,), start, end)
     return {
