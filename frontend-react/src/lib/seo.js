@@ -43,7 +43,7 @@ export const OG_IMAGE = `${SITE_URL}/og-image.png`;
 export const DEFAULT_SEO = {
   title: "Resume Optimizer — Free ATS Resume Checker & Job Match Score",
   description:
-    "Check how your resume scores against any job description. Get an evidence-based ATS match report showing missing keywords, skill gaps, and exactly what to fix. Free with an account.",
+    "Check how your resume scores against any job description, then rewrite weak bullet points with AI that never invents a number. Evidence-based ATS analysis: missing keywords, skill gaps, and exactly what to fix. Free to try.",
 };
 
 /**
@@ -84,11 +84,11 @@ export const PAGE_SEO = {
       "ats resume score, resume readiness check, free resume grader, resume checker no job description, resume analysis tool",
   },
   "/pricing": {
-    title: "Pricing — Free ATS Scans & Unlimited Plans",
+    title: "Pricing — Resume Scans & AI Rewrites from ₹149",
     description:
-      "Start free with 3 job-match scans a month. Upgrade for unlimited scans, full explainable breakdowns, and the voice-editing agent. Plans from $15/month.",
+      "Start free with 5 scans and 3 AI rewrites a month. One-time passes from ₹149 - no subscription, nothing to cancel. Pro: ₹399 for 100 scans, 100 rewrites.",
     keywords:
-      "resume checker pricing, ats scanner cost, resume tool plans",
+      "resume checker pricing india, ats scanner cost, ai resume rewrite price, resume tool plans",
   },
   "/login": {
     title: "Sign In",
@@ -139,6 +139,35 @@ export function seoFor(path) {
 // markup present in the initial response, and these values never depend
 // on client state.
 
+/**
+ * The plan ladder, as the marketing surfaces need it.
+ *
+ * app/config.py is the real source of truth -- it is what checkout
+ * charges. This is a build-time mirror, needed because three things have
+ * to state prices in static HTML that exists before any API call: the
+ * SoftwareApplication offers, llms.txt, and the prerendered pricing
+ * summary. A crawler or an assistant reading the page gets whatever is
+ * in the served markup, so "fetch it at runtime" is not available to
+ * them.
+ *
+ * A mirror can drift, and a pricing page that contradicts checkout is
+ * worse than one that says nothing -- so it is not left to discipline:
+ * tests/test_pricing_copy_matches_config.py parses this array and fails
+ * the backend suite if any number here disagrees with B2C_TIERS.
+ */
+export const PLANS = [
+  { id: "free", name: "Free", inr: 0, usd: 0, days: 30, scans: 5, rewrites: 3 },
+  { id: "boost", name: "Boost", inr: 149, usd: 4.99, days: 7, scans: 30, rewrites: 30 },
+  { id: "pro", name: "Pro", inr: 399, usd: 12.99, days: 30, scans: 100, rewrites: 100 },
+  { id: "pro_season", name: "Pro Season", inr: 999, usd: 29.99, days: 90, scans: 300, rewrites: 300 },
+];
+
+/** "for 7 days" / "for 30 days" -- the buyer's words, from one place. */
+export function planDurationLabel(days) {
+  if (days % 30 === 0 && days > 30) return `for ${days / 30} months`;
+  return `for ${days} days`;
+}
+
 export function softwareApplicationLd() {
   return {
     "@context": "https://schema.org",
@@ -151,19 +180,22 @@ export function softwareApplicationLd() {
     description: DEFAULT_SEO.description,
     // Reflects app/config.py's B2C_TIERS. Keep these in step with the
     // real prices -- Google penalises structured data that contradicts
-    // what the page actually shows.
-    offers: [
-      { "@type": "Offer", name: "Free", price: "0", priceCurrency: "USD" },
-      { "@type": "Offer", name: "Starter", price: "15", priceCurrency: "USD" },
-      { "@type": "Offer", name: "Pro", price: "29", priceCurrency: "USD" },
-      { "@type": "Offer", name: "Pro+", price: "45", priceCurrency: "USD" },
-    ],
+    // what the page actually shows, and the pricing page reads its
+    // numbers from the backend, so a stale copy here is visible.
+    //
+    // Both currencies are listed because they are separate listed prices
+    // set at local price points, not conversions of one another (see
+    // config.py) -- INR is the primary market.
+    offers: PLANS.flatMap((p) => [
+      { "@type": "Offer", name: p.name, price: String(p.inr), priceCurrency: "INR" },
+      ...(p.inr === 0 ? [] : [{ "@type": "Offer", name: p.name, price: String(p.usd), priceCurrency: "USD" }]),
+    ]),
     featureList: [
       "ATS resume scoring against a job description",
+      "AI rewriting of resume bullet points",
       "JD-less resume readiness analysis",
       "Missing keyword and skill gap detection",
       "Requirement-by-requirement evidence matching",
-      "Job description bias auditing",
     ],
   };
 }
@@ -188,7 +220,19 @@ export function organizationLd() {
 export const FAQ = [
   {
     q: "Is this resume checker free?",
-    a: "Yes. Scoring a resume against a job description and checking general ATS readiness are both free on the starter plan — you just need a free account, which is what saves your scan history to you. Paid plans add unlimited monthly scans and the voice-editing agent.",
+    a: "Yes. Scoring a resume against a job description and checking general ATS readiness are both free, and you can run a scan without an account at all. A free account adds saved scan history, 5 scans a month, and 3 AI bullet rewrites a month. Paid plans raise those allowances.",
+  },
+  {
+    q: "How much does it cost?",
+    a: "Plans are one-time passes, not subscriptions — nothing renews on its own and there is nothing to cancel. Boost is ₹149 for 7 days (30 scans, 30 rewrites), Pro is ₹399 for 30 days (100 scans, 100 rewrites), and Pro Season is ₹999 for 90 days (300 scans, 300 rewrites). In US dollars those are $4.99, $12.99 and $29.99.",
+  },
+  {
+    q: "What does the AI resume rewrite actually do?",
+    a: "It rewrites the bullet points under one role into stronger lines: an action verb, the specific scope of what you did, and the outcome it produced. When a job description is supplied it prefers that posting's vocabulary, but only where your stated experience genuinely matches it.",
+  },
+  {
+    q: "Will the AI invent achievements or numbers on my resume?",
+    a: "No. The rewriter is explicitly prohibited from inventing or estimating any figure that is not in your original bullet, because a fabricated metric is a claim you would have to defend in an interview and could not. When a bullet has no measurable outcome, it improves the verb, scope and phrasing, then flags the bullet and asks you for the specific number that is missing.",
   },
   {
     q: "What is an ATS and why does my resume score matter?",
@@ -208,7 +252,7 @@ export const FAQ = [
   },
   {
     q: "Is my resume data kept private?",
-    a: "Resumes are only stored when you're signed in, so they can appear in your scan history. Anonymous scans aren't persisted at all.",
+    a: "Resumes are only stored when you're signed in, so they can appear in your scan history. Anonymous scans aren't persisted at all, and your resume is never sold or used to train a model.",
   },
 ];
 
@@ -273,4 +317,161 @@ export function applySeo(path) {
   if (seo.keywords) {
     setTag('meta[name="keywords"]', { name: "keywords", content: seo.keywords });
   }
+}
+
+
+// ---------------------------------------------------------------------
+// AI crawlers: robots.txt and llms.txt (GEO / AEO)
+// ---------------------------------------------------------------------
+
+/**
+ * AI crawlers this site takes an explicit position on.
+ *
+ * Stating a position matters because silence is not neutral. Several of
+ * these -- Google-Extended most notably -- are allowed by default, so a
+ * robots.txt that never mentions them makes "we never thought about it"
+ * and "we opted in deliberately" look identical from the outside.
+ *
+ * `purpose` records WHY each is allowed, because the trade-off differs:
+ *
+ *   "search"   -- fetches a page to answer a question a user is asking
+ *                 now, and cites the source. That is a referral channel,
+ *                 and for a tool people find by asking "how do I check my
+ *                 resume against a job description" it is the whole
+ *                 opportunity.
+ *   "training" -- takes content to train future models, with no citation
+ *                 and no traffic back. Allowed here anyway: the reachable
+ *                 pages are public marketing and explanatory copy, and
+ *                 presence in model weights is itself how a tool gets
+ *                 recommended when someone asks an assistant for one.
+ *
+ * None of this exposes user data. Every authenticated surface is
+ * noindex'd and disallowed, so no resume, scan or account page is
+ * reachable by any crawler whatever its purpose.
+ *
+ * To opt out of training while keeping AI-search referrals, flip the
+ * "training" entries to allow: false. Nothing else needs to change.
+ */
+export const AI_CRAWLERS = [
+  { name: "OAI-SearchBot", purpose: "search", allow: true },
+  { name: "PerplexityBot", purpose: "search", allow: true },
+  { name: "ClaudeBot", purpose: "search", allow: true },
+  { name: "GPTBot", purpose: "training", allow: true },
+  { name: "Google-Extended", purpose: "training", allow: true },
+  { name: "CCBot", purpose: "training", allow: true },
+];
+
+/**
+ * The full robots.txt body.
+ *
+ * Lives here rather than in scripts/prerender.mjs because the build
+ * OVERWRITES public/robots.txt in the output -- so a rule added only to
+ * the static file silently disappears from every real deployment. One
+ * generator, used by the build and mirrored by the static fallback, is
+ * the only arrangement where that cannot happen.
+ */
+export function robotsTxt(siteUrl = SITE_URL) {
+  const noindexRoutes = Object.keys(PAGE_SEO).filter((p) => PAGE_SEO[p].noindex);
+  const aiBlocks = AI_CRAWLERS.map(
+    ({ name, purpose, allow }) =>
+      `# ${purpose === "search" ? "AI search / answer engine -- cites and refers traffic" : "Model training -- no citation, no referral"}\n` +
+      `User-agent: ${name}\n${allow ? "Allow" : "Disallow"}: /`
+  ).join("\n\n");
+
+  return `User-agent: *
+Allow: /
+
+# Authenticated surfaces and auth pages. These have no public content:
+# indexing them wastes crawl budget and can surface a thin sign-in page
+# above the tool pages people are actually searching for.
+${noindexRoutes.map((r) => `Disallow: ${r}`).join("\n")}
+
+${aiBlocks}
+
+Sitemap: ${siteUrl}/sitemap.xml
+`;
+}
+
+/**
+ * /llms.txt -- a plain-text brief for language models reading this site.
+ *
+ * The convention (llmstxt.org) exists because an assistant answering
+ * "what's a good ATS resume checker?" is working from whatever prose it
+ * can extract, and a React app's rendered HTML is a poor summary of what
+ * the product does. This states it directly.
+ *
+ * Written as facts a model can quote, not marketing. Two things here are
+ * deliberate and both are about not being misrepresented: the pricing is
+ * stated with its real currency and pass length, because an assistant
+ * that says "it's a $29/month subscription" costs a sale from someone
+ * who would have paid Rs 399 once; and the limits section is included at
+ * all, because a model that oversells the tool produces users who arrive
+ * expecting something it does not do.
+ */
+export function llmsTxt(siteUrl = SITE_URL) {
+  return `# ${SITE_NAME}
+
+> ${DEFAULT_SEO.description}
+
+${SITE_NAME} is a free web tool that scores a resume against a specific job
+description and rewrites weak bullet points with AI. It is aimed at job
+seekers, and priced for the Indian market.
+
+## What it does
+
+- **Job-description match report.** Parses a posting into individual
+  requirements, tiers each by how the posting words it ("must have" is
+  weighted differently from "nice to have"), and matches each against
+  evidence in the resume. Seven weighted dimensions combine into an
+  overall score, and every number is reported with its reasoning.
+- **ATS readiness check.** Scores a resume with no job posting at all:
+  structural completeness, quantified achievements, action-verb density,
+  active vs. passive voice, and skill coverage.
+- **AI bullet rewriting.** Rewrites the bullets under one role into
+  stronger lines -- action verb, specific scope, measurable outcome --
+  optionally tailored to a job description.
+- **Parser-safety checks.** Flags multi-column layouts, tables, embedded
+  images and header/footer contact details, which are the common ways a
+  visually polished resume becomes unreadable to the software that
+  processes it first.
+
+## What it will not do
+
+- **It never invents a metric.** The rewriter is prohibited from adding
+  any figure not present in the original bullet. A fabricated number is a
+  claim the candidate must defend in an interview and cannot. Where a
+  bullet has no measurable outcome, the tool improves the verb, scope and
+  phrasing, then asks the user for the missing number rather than
+  guessing it.
+- **It does not predict whether you will get an interview.** It measures
+  how well a resume evidences one posting's stated requirements. It has
+  no visibility into other applicants or the hiring manager's priorities.
+- **It does not read scanned or image-only PDFs reliably.** When that
+  happens the user is told directly rather than shown a low score based
+  on nothing.
+
+## Pricing
+
+All plans are one-time passes, not auto-renewing subscriptions. Nothing
+renews on its own and there is nothing to cancel. Buying while a pass is
+running adds to the remaining days.
+
+| Plan | Price | Valid | Scans | AI rewrites |
+| --- | --- | --- | --- | --- |
+${PLANS.map((p) => `| ${p.name} | ${p.inr === 0 ? "Free" : `Rs ${p.inr} / $${p.usd}`} | ${p.inr === 0 ? "monthly reset" : `${p.days} days`} | ${p.scans} | ${p.rewrites} |`).join("\n")}
+
+Scanning works without an account. A free account adds saved history and
+AI rewrites. Rupee and dollar prices are separate listed prices set for
+their own markets, not conversions of one another.
+
+## Privacy
+
+Resumes are stored only for signed-in users, so they can appear in scan
+history. Anonymous scans are not persisted. Resume content is not sold
+and is not used to train models.
+
+## Key pages
+
+${INDEXABLE_ROUTES.map((r) => `- [${PAGE_SEO[r].title}](${siteUrl}${r === "/" ? "/" : r}): ${PAGE_SEO[r].description}`).join("\n")}
+`;
 }

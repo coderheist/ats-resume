@@ -30,11 +30,27 @@ vi.mock("../lib/firebase", () => ({
   getFirebaseAuth: vi.fn(() => ({ currentUser: null })),
 }));
 
+// Mirrors what /billing/tiers now serves: fixed-length passes with one
+// price per currency, an allowance pair, and no billing cycle anywhere.
 const SAMPLE_TIERS = {
   consumer: {
-    free: { id: "free", name: "Free", monthly_price_usd: 0, annual_price_usd: null, features: ["basic_ats_readiness_score"] },
-    pro: { id: "pro", name: "Pro", monthly_price_usd: 29, annual_price_usd: 216, features: ["voice_editor", "unlimited_resume_versions"] },
+    free: {
+      id: "free", name: "Free", tagline: "Try it on one application.",
+      price_usd: 0, price_inr: 0, duration_days: 30,
+      jd_match_scans: 5, ai_rewrites: 3,
+      features: ["ats_readiness_score"],
+    },
+    pro: {
+      id: "pro", name: "Pro", tagline: "100 scans and 100 rewrites a month.",
+      price_usd: 12.99, price_inr: 399, duration_days: 30,
+      jd_match_scans: 100, ai_rewrites: 100,
+      features: ["ai_bullet_rewrite", "unlimited_resume_versions"],
+    },
   },
+  display_order: ["free", "pro"],
+  recommended: "pro",
+  currencies: ["USD"],
+  default_currency: "USD",
 };
 
 function renderPricing() {
@@ -56,23 +72,46 @@ describe("PricingPage", () => {
     apiGet.mockResolvedValue(SAMPLE_TIERS);
     renderPricing();
     await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
-    expect(screen.getByText("$29")).toBeInTheDocument();
-    expect(screen.getByText("Voice-editing agent")).toBeInTheDocument();
+    expect(screen.getByText("$12.99")).toBeInTheDocument();
+    expect(screen.getByText("AI bullet rewriting")).toBeInTheDocument();
   });
 
-  it("switches to annual pricing when the toggle is clicked", async () => {
+  it("states the pass length rather than implying a recurring charge", async () => {
+    /* "/mo" would say the card renews on its own. Nothing here does --
+       there is no auto-debit integration and no mandate -- so the label
+       has to say what the buyer is actually agreeing to. */
     apiGet.mockResolvedValue(SAMPLE_TIERS);
     renderPricing();
     await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Annual"));
-    expect(screen.getByText("$216")).toBeInTheDocument();
+    expect(screen.getByText(/for 30 days/)).toBeInTheDocument();
+    expect(screen.queryByText("Annual")).not.toBeInTheDocument();
+    expect(screen.queryByText("Monthly")).not.toBeInTheDocument();
+  });
+
+  it("leads with the allowances, which are what a buyer compares", async () => {
+    apiGet.mockResolvedValue(SAMPLE_TIERS);
+    renderPricing();
+    await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
+    // One allowance pair per card -- both plans list them.
+    expect(screen.getAllByText(/resume scans/)).toHaveLength(2);
+    expect(screen.getAllByText(/AI bullet rewrites/)).toHaveLength(2);
+    // Pro lists 100 of each, so the figure appears twice on that card.
+    expect(screen.getAllByText("100")).toHaveLength(2);
+  });
+
+  it("marks the plan the backend recommends, rather than deciding again here", async () => {
+    apiGet.mockResolvedValue(SAMPLE_TIERS);
+    const { container } = renderPricing();
+    await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
+    expect(screen.getByText("Most popular")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pricing-card-recommended")).toHaveLength(1);
   });
 
   it("redirects to /login when clicking Upgrade while signed out", async () => {
     apiGet.mockResolvedValue(SAMPLE_TIERS);
     renderPricing();
     await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Upgrade"));
+    fireEvent.click(screen.getByText("Get Pro"));
     await waitFor(() => expect(apiPost).not.toHaveBeenCalled());
   });
 
@@ -99,9 +138,9 @@ describe("PricingPage", () => {
 
     renderPricing();
     await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Upgrade"));
+    fireEvent.click(screen.getByText("Get Pro"));
 
-    await waitFor(() => expect(apiPost).toHaveBeenCalledWith("/payments/create-order", { tier: "pro", billing_cycle: "monthly", currency: "USD" }));
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith("/payments/create-order", { tier: "pro", currency: "USD" }));
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith("/payments/verify", { razorpay_order_id: "order_1", razorpay_payment_id: "pay_1", razorpay_signature: "sig_1" }));
     // currentTier updates immediately on success, so the button correctly
     // settles on "Current plan" (disabled) rather than a transient status
@@ -124,9 +163,9 @@ describe("PricingPage", () => {
 
     renderPricing();
     await waitFor(() => expect(screen.getByText("Pro")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Upgrade"));
+    fireEvent.click(screen.getByText("Get Pro"));
 
-    await waitFor(() => expect(screen.getByText("Upgrade")).toBeInTheDocument()); // back to idle, not "error"
+    await waitFor(() => expect(screen.getByText("Get Pro")).toBeInTheDocument()); // back to idle, not "error"
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
@@ -134,12 +173,19 @@ describe("PricingPage", () => {
 describe("PricingPage currency", () => {
   const TIERS_RESPONSE = {
     consumer: {
-      starter: {
-        id: "starter", name: "Starter", features: [],
-        monthly_price_usd: 15, annual_price_usd: 108,
-        monthly_price_inr: 1249, annual_price_inr: 8999,
+      boost: {
+        id: "boost", name: "Boost", features: [], tagline: "One week, one big push.",
+        price_usd: 4.99, price_inr: 149, duration_days: 7,
+        jd_match_scans: 30, ai_rewrites: 30,
+      },
+      pro_season: {
+        id: "pro_season", name: "Pro Season", features: [], tagline: "A whole job hunt.",
+        price_usd: 29.99, price_inr: 999, duration_days: 90,
+        jd_match_scans: 300, ai_rewrites: 300,
       },
     },
+    display_order: ["boost", "pro_season"],
+    recommended: "pro_season",
     currencies: ["USD", "INR"],
     default_currency: "USD",
   };
@@ -159,34 +205,35 @@ describe("PricingPage currency", () => {
 
   it("defaults to the currency the backend nominates", async () => {
     mountPricing();
-    expect(await screen.findByText(/\$15/)).toBeInTheDocument();
+    expect(await screen.findByText(/\$4\.99/)).toBeInTheDocument();
   });
 
   it("shows the listed INR price, not a conversion of the USD one", async () => {
     mountPricing();
-    await screen.findByText(/\$15/);
+    await screen.findByText(/\$4\.99/);
 
     fireEvent.click(screen.getByRole("button", { name: /INR/ }));
 
-    // 1,249 is config.py's own number. A conversion of $15 would land
-    // nowhere near it, which is the whole point of listing prices.
-    expect(await screen.findByText(/1,249/)).toBeInTheDocument();
-    expect(screen.queryByText(/\$15/)).not.toBeInTheDocument();
+    // Rs 149 is config.py's own number, set at a local price point. A
+    // conversion of $4.99 would land nowhere near it, which is the whole
+    // point of listing prices per currency instead of converting.
+    expect(await screen.findByText(/149/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$4\.99/)).not.toBeInTheDocument();
   });
 
-  it("applies the currency to the annual price too", async () => {
+  it("applies the currency to every pass length", async () => {
     mountPricing();
-    await screen.findByText(/\$15/);
+    await screen.findByText(/\$4\.99/);
 
     fireEvent.click(screen.getByRole("button", { name: /INR/ }));
-    fireEvent.click(screen.getByRole("button", { name: /^Annual$/ }));
 
-    expect(await screen.findByText(/8,999/)).toBeInTheDocument();
+    expect(await screen.findByText(/149/)).toBeInTheDocument();
+    expect(screen.getByText(/999/)).toBeInTheDocument();
   });
 
   it("offers only the currencies the backend supports", async () => {
     mountPricing();
-    await screen.findByText(/\$15/);
+    await screen.findByText(/\$4\.99/);
 
     expect(screen.getByRole("button", { name: /USD/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /INR/ })).toBeInTheDocument();

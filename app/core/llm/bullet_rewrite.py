@@ -1,0 +1,206 @@
+"""
+AI bullet rewriting -- the metered feature the paid plans actually sell.
+
+The quality bar and the worked examples here are lifted from
+voice_system_prompt.py, which had already worked out what separates a
+weak resume bullet from a strong one. That work is reused rather than
+reinvented: the standard does not change because the input arrived as
+typed text instead of speech.
+
+ONE THING IS DELIBERATELY DIFFERENT FROM THE VOICE AGENT, AND IT IS THE
+MOST IMPORTANT RULE IN THIS MODULE. The voice agent, faced with a bullet
+that has no measurable outcome, asks the candidate for the number. This
+path has no conversation to ask into -- it is a single request/response
+against text that is already written. So it must NEVER invent the number.
+
+A resume tool that fabricates "reduced costs by 30%" is not a helpful
+tool; it writes a claim the candidate has to defend in an interview and
+cannot. It is worse than useless, because the output looks better while
+being a liability. When a bullet has no metric, the rewrite improves what
+can honestly be improved -- verb strength, specificity, scope, removing
+passive voice and filler -- and returns `needs_metric: true` with a
+prompt naming what to measure, so the UI can ask the person who actually
+knows the answer.
+
+Output is JSON so each bullet keeps its `needs_metric` flag alongside its
+text. Prose would force the caller to parse a flag back out of English,
+and the flag is the part that keeps the feature honest.
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, asdict
+
+from app.core.llm.client_factory import LLMClient
+from app.core.llm.router import TaskType, route
+
+# One rewrite call handles a whole role's bullets rather than one line at
+# a time. That is both what the pricing meters (one role = one rewrite,
+# see entitlement_service.record_rewrite) and what produces better
+# output: the model can see the other bullets and avoid opening four in a
+# row with the same verb, which per-bullet calls reliably do.
+MAX_BULLETS_PER_REQUEST = 12
+MAX_BULLET_CHARS = 1200
+MAX_JD_CHARS = 6000
+
+REWRITE_SYSTEM = """You rewrite resume bullet points. You are given the bullets under one role, and sometimes a job description to tailor them toward.
+
+## What a strong bullet looks like
+
+Every bullet is: a strong action verb, the specific thing done (with scope -- scale, tooling, team size, timeframe), and the outcome it produced. Implied subject, never first person: "Led the migration...", not "I led the migration...".
+
+Weak: "Wrote documentation for the API."
+Strong: "Authored the public API reference docs, reducing integration support requests by roughly a third within two months of publishing."
+
+Weak: "Fixed a bunch of bugs in the mobile app."
+Strong: "Resolved 30+ crash-causing defects in the iOS app over one quarter, lifting the crash-free session rate from 96% to 99.4%."
+
+Weak: "Set up monitoring for the infrastructure."
+Strong: "Instrumented Prometheus/Grafana monitoring across 40+ services, cutting mean time to detect production incidents from 45 minutes to 6."
+
+## The rule you must never break
+
+NEVER invent, estimate, or imply a number, percentage, duration, team size, or outcome that is not present in the original bullet or clearly implied by it.
+
+You have no way to ask the candidate what the real figure was. A fabricated metric is a claim they will be asked to defend in an interview and cannot. This rule outranks every other instruction here, including making the bullet sound impressive.
+
+When the original bullet has no measurable outcome:
+  - Rewrite what you honestly can: a stronger verb, the specific scope that IS stated, active voice, removing filler like "responsible for" and "helped with".
+  - Set "needs_metric": true.
+  - In "metric_hint", name the specific measurement that would make this bullet land -- e.g. "How many services? What did latency go from and to?" Ask for the number; do not guess it.
+
+When the original bullet already carries a real metric, keep that exact figure. Do not round it, scale it, or make it sound larger.
+
+## Tailoring to a job description
+
+When a job description is given, prefer the vocabulary it uses where the candidate's work genuinely matches -- if they wrote "containers" and the posting says "Kubernetes", use "Kubernetes" ONLY if the original mentions Kubernetes or something unambiguously equivalent. Matching a keyword the candidate has not actually earned is the same fabrication problem in a different costume.
+
+## Output
+
+Return ONLY a JSON object, no prose around it:
+
+{"bullets": [{"original": "<the input bullet, unchanged>", "rewritten": "<your rewrite>", "needs_metric": true|false, "metric_hint": "<question naming the missing measurement, or empty string>"}]}
+
+One entry per input bullet, in the same order. If a bullet is already strong and you cannot improve it honestly, return it unchanged with "needs_metric": false."""
+
+
+@dataclass
+class RewrittenBullet:
+    original: str
+    rewritten: str
+    needs_metric: bool
+    metric_hint: str
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def build_rewrite_messages(
+    bullets: list[str],
+    *,
+    role_title: str | None = None,
+    company: str | None = None,
+    jd_text: str | None = None,
+) -> list[dict]:
+    parts: list[str] = []
+    where = " at ".join(x for x in (role_title, company) if x)
+    if where:
+        parts.append(f"Role: {where}")
+    if jd_text:
+        parts.append(
+            "Job description to tailor toward (use its vocabulary only where the "
+            "candidate's work genuinely matches):\n" + jd_text[:MAX_JD_CHARS]
+        )
+    numbered = "\n".join(f"{i + 1}. {b}" for i, b in enumerate(bullets))
+    parts.append("Bullets to rewrite:\n" + numbered)
+    return [{"role": "user", "content": "\n\n".join(parts)}]
+
+
+def _extract_json(text: str) -> dict:
+    """Models occasionally wrap JSON in a ```json fence or a sentence of
+    preamble despite being told not to. Strip the common cases rather
+    than failing the whole request over formatting -- but do not attempt
+    to repair genuinely malformed JSON, which risks silently changing
+    what the model said about a candidate's work."""
+    text = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("The rewrite model returned no JSON object.")
+    return json.loads(text[start : end + 1])
+
+
+def _coerce(payload: dict, originals: list[str]) -> list[RewrittenBullet]:
+    """Align the model's output back onto the input list.
+
+    Positional, and defensive about length: a model that returns fewer
+    entries than it was given must not silently drop a candidate's bullet
+    from their resume. Anything missing falls back to the original text,
+    flagged as needing a metric only if it visibly lacks a digit.
+    """
+    rows = payload.get("bullets") or []
+    out: list[RewrittenBullet] = []
+    for i, original in enumerate(originals):
+        row = rows[i] if i < len(rows) and isinstance(rows[i], dict) else {}
+        rewritten = (row.get("rewritten") or "").strip() or original
+        needs = row.get("needs_metric")
+        if not isinstance(needs, bool):
+            needs = not re.search(r"\d", rewritten)
+        out.append(RewrittenBullet(
+            original=original,
+            rewritten=rewritten,
+            needs_metric=needs,
+            metric_hint=(row.get("metric_hint") or "").strip(),
+        ))
+    return out
+
+
+def rewrite_bullets(
+    client: LLMClient,
+    bullets: list[str],
+    *,
+    role_title: str | None = None,
+    company: str | None = None,
+    jd_text: str | None = None,
+    model: str | None = None,
+    task: TaskType = TaskType.BULLET_REWRITE,
+) -> list[RewrittenBullet]:
+    """Rewrite one role's bullets.
+
+    `task` defaults to BULLET_REWRITE but is passed in by the route so a
+    Free-tier request can be served by the cheaper model
+    (app/core/llm/tier_routing.py decides which). Raises whatever the
+    client raises; the route is responsible for turning that into a 502
+    rather than leaking a provider error to the candidate.
+    """
+    cleaned = [b.strip()[:MAX_BULLET_CHARS] for b in bullets if b and b.strip()]
+    if not cleaned:
+        return []
+    cleaned = cleaned[:MAX_BULLETS_PER_REQUEST]
+
+    resolved_model = model or route(task)
+    response = client.create_message(
+        model=resolved_model,
+        system=REWRITE_SYSTEM,
+        messages=build_rewrite_messages(cleaned, role_title=role_title, company=company, jd_text=jd_text),
+        # Generous relative to the input: the rewrites are longer than the
+        # originals by design, and each carries a metric_hint alongside it.
+        max_tokens=1600,
+    )
+
+    if "usage" in response:
+        from app.core.llm.token_pricing import _infer_provider_from_model, record_llm_usage
+        record_llm_usage(
+            resolved_model, response["usage"],
+            provider=_infer_provider_from_model(resolved_model),
+        )
+
+    text = ""
+    for block in response.get("content", []):
+        if block.get("type") == "text":
+            text = block["text"]
+            break
+    return _coerce(_extract_json(text), cleaned)

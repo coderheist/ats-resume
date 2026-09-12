@@ -8,7 +8,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, bias_audit, billing, history, payments, resume, scan, voice
+from app.api.routes import auth, bias_audit, billing, history, payments, resume, rewrite, scan, voice
 from app.core.rate_limit import RateLimitMiddleware
 
 app = FastAPI(
@@ -132,6 +132,7 @@ app.add_middleware(
 
 app.include_router(scan.router)
 app.include_router(resume.router)
+app.include_router(rewrite.router)
 app.include_router(bias_audit.router)
 app.include_router(voice.router)
 app.include_router(billing.router)

@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import B2C_TIERS
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
@@ -15,6 +16,13 @@ RESUME = {
     "work": [{"name": "Acme", "position": "Engineer", "highlights": [{"text": "Built things, cut latency by 40%."}]}],
 }
 JD_TEXT = "Software engineer role requiring Python and AWS experience."
+
+# Read from the pricing table, not hard-coded: these tests cover the
+# enforcement mechanism, not this quarter's allowance. When the Free plan
+# was repriced from 10 scans to 5, hard-coded copies of "10" broke four
+# tests that had nothing to say about pricing.
+FREE_SCANS = B2C_TIERS["free"].jd_match_scans
+FREE_REWRITES = B2C_TIERS["free"].ai_rewrites
 
 
 @pytest.fixture
@@ -95,20 +103,27 @@ class TestAuthMe:
         body = resp.json()
         assert body["uid"] == "test-uid"
         assert body["tier"] == "free"
-        assert body["jd_match_scans_per_month"] == 10
-        assert body["jd_match_scans_used_this_month"] == 0
-        assert body["jd_match_scans_exhausted"] is False
-        assert body["jd_match_scans_reset_at"].endswith("Z")
+        assert body["scans_limit"] == FREE_SCANS
+        assert body["scans_used"] == 0
+        assert body["scans_exhausted"] is False
+        assert body["period_end"].endswith("Z")
+        # Rewrites are metered separately from scans -- running out of one
+        # must not imply anything about the other.
+        assert body["rewrites_limit"] == FREE_REWRITES
+        assert body["rewrites_used"] == 0
+        assert body["rewrites_exhausted"] is False
 
     def test_me_flags_an_exhausted_allowance_with_its_reset_time(self, client):
         with _mock_auth():
-            for _ in range(10):
+            for _ in range(FREE_SCANS):
                 client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
             body = client.get("/auth/me", headers=AUTH_HEADERS).json()
         from app.core.services.entitlement_service import next_reset_at
-        assert body["jd_match_scans_used_this_month"] == 10
-        assert body["jd_match_scans_exhausted"] is True
-        assert body["jd_match_scans_reset_at"] == next_reset_at().isoformat(timespec="seconds") + "Z"
+        assert body["scans_used"] == FREE_SCANS
+        assert body["scans_exhausted"] is True
+        # The free tier has no purchase instant to anchor a pass to, so its
+        # window is the calendar month (see entitlement_service.period_bounds).
+        assert body["period_end"] == next_reset_at().isoformat(timespec="seconds") + "Z"
 
     def test_second_call_reuses_the_same_user_not_a_new_one(self, client, db_session):
         with _mock_auth():
@@ -144,9 +159,9 @@ class TestAnonymousBackwardCompatibility:
 
 
 class TestEntitlementEnforcement:
-    def test_signed_in_free_tier_blocked_after_ten_scans(self, client):
+    def test_signed_in_free_tier_blocked_once_the_allowance_is_spent(self, client):
         with _mock_auth():
-            for i in range(10):
+            for i in range(FREE_SCANS):
                 resp = client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
                 assert resp.status_code == 200, f"scan {i + 1} should succeed"
             blocked = client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
@@ -154,14 +169,14 @@ class TestEntitlementEnforcement:
         detail = blocked.json()["detail"]
         assert detail["error"] == "scan_limit_reached"
         assert "Free plan" in detail["message"]
-        assert detail["used"] == 10 and detail["limit"] == 10
+        assert detail["used"] == FREE_SCANS and detail["limit"] == FREE_SCANS
 
     def test_429_reports_when_the_allowance_resets(self, client):
         """The UI pops a dialog naming the reset moment, so the refusal
         has to carry it -- as explicit UTC the browser can localize."""
         from app.core.services.entitlement_service import next_reset_at
         with _mock_auth():
-            for _ in range(10):
+            for _ in range(FREE_SCANS):
                 client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
             blocked = client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
         detail = blocked.json()["detail"]
@@ -171,9 +186,9 @@ class TestEntitlementEnforcement:
 
     def test_full_report_counts_toward_the_same_monthly_limit(self, client):
         """jd_match and standalone scans share one entitlement pool
-        (jd_match_scans_per_month) -- verify a mix of both hits the cap."""
+        (Tier.jd_match_scans) -- verify a mix of both hits the cap."""
         with _mock_auth():
-            for i in range(10):  # alternate the two modes until the shared pool is spent
+            for i in range(FREE_SCANS):  # alternate the two modes until the shared pool is spent
                 if i % 2 == 0:
                     resp = client.post("/score/standalone", json={"resume": RESUME}, headers=AUTH_HEADERS)
                 else:

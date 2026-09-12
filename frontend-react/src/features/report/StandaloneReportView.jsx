@@ -14,6 +14,7 @@ import { SectionHeader } from "../../components/SectionHeader";
 import { StepIndicator } from "../../components/StepIndicator";
 import { TagList } from "../../components/TagList";
 import { TopList } from "../../components/TopList";
+import { BulletRewritePanel } from "../rewrite/BulletRewritePanel";
 import { FileDropzone } from "../upload/FileDropzone";
 import { useResumeUpload } from "../upload/useResumeUpload";
 import { useRoles } from "./useRoles";
@@ -175,6 +176,13 @@ export function StandaloneReportView() {
                 {suggestionsError ? `Recommendations unavailable: ${suggestionsError}` : "Loading recommendations…"}
               </p>
             )}
+          </FadeUpSection>
+
+          {/* No jdText here by design: this mode has no posting to tailor
+              toward, so the rewrite improves the bullet on its own terms
+              rather than inventing a target to aim at. */}
+          <FadeUpSection order={2}>
+            <BulletRewritePanel resume={resume} />
           </FadeUpSection>
         </div>
       )}

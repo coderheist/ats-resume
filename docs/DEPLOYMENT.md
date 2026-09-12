@@ -372,6 +372,8 @@ WHERE action LIKE '%_scan'
 GROUP BY 1, 2 ORDER BY 1 DESC;
 
 -- Abandoned checkouts
+-- billing_cycle holds the pass length sold ("7d"/"30d"/"90d"), not a
+-- recurring-billing cycle -- every plan is a one-time pass.
 SELECT tier, billing_cycle, count(*)
 FROM payments WHERE status = 'created'
 GROUP BY 1, 2;

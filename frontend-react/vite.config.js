@@ -71,5 +71,24 @@ export default defineConfig(({ isSsrBuild }) => ({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.js"],
+    // Every test file gets its own jsdom instance, and spinning up 25 of
+    // them at once starved the ones that were already running: whole
+    // files passed in isolation but a handful of `waitFor` calls timed
+    // out on each full-suite run, and WHICH ones varied per run. That is
+    // the signature of contention, not of a real failure -- but a suite
+    // that reports different results each time is worthless either way,
+    // because nobody can tell a genuine regression from the noise.
+    //
+    // Two changes, both about headroom rather than hiding anything:
+    // cap the worker pool so the machine is not oversubscribed, and give
+    // `waitFor` a timeout that a slow-but-correct render can still meet.
+    // The default 5s is generous for a fast machine and marginal for a
+    // loaded one.
+    testTimeout: 15000,
+    hookTimeout: 15000,
+    poolOptions: {
+      threads: { maxThreads: 2, minThreads: 1 },
+      forks: { maxForks: 2, minForks: 1 },
+    },
   },
 }));

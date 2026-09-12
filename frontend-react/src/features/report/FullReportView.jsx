@@ -3,6 +3,7 @@ import {
   AlertCircle, AlertTriangle, FileCheck, HelpCircle, Lightbulb, ListChecks, Tags, ThumbsUp,
 } from "lucide-react";
 import { BulletList } from "../../components/BulletList";
+import { BulletRewritePanel } from "../rewrite/BulletRewritePanel";
 import { DimensionTile } from "../../components/DimensionTile";
 import { ErrorBox } from "../../components/ErrorBox";
 import { FadeUpSection } from "../../components/FadeUpSection";
@@ -224,6 +225,15 @@ export function FullReportView() {
             <TopList items={data.suggestions} emptyText="No recommendations — this resume is in strong shape against this JD.">
               {(visible) => <BulletList items={visible} kind="suggestions" emptyText="No recommendations — this resume is in strong shape against this JD." />}
             </TopList>
+          </FadeUpSection>
+
+          {/* Directly after the recommendations, and given the JD, because
+              this is the moment the reader has just been told which
+              bullets are weak and against what. Sending them elsewhere to
+              act on it, with the findings off screen, is how a feature
+              goes unused. */}
+          <FadeUpSection order={6}>
+            <BulletRewritePanel resume={resume} jdText={jdText} />
           </FadeUpSection>
         </div>
       )}

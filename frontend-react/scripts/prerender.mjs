@@ -64,7 +64,7 @@ if (!existsSync(ssrEntry)) {
 
 // entry-server.jsx re-exports src/lib/seo.js, so one SSR bundle carries
 // both the renderer and the route metadata they must agree on.
-const { render, INDEXABLE_ROUTES, PAGE_SEO, SITE_URL, seoFor, faqPageLd, organizationLd } =
+const { render, INDEXABLE_ROUTES, PAGE_SEO, SITE_URL, seoFor, faqPageLd, organizationLd, robotsTxt, llmsTxt } =
   await import(pathToFileURL(ssrEntry).href);
 
 const template = readFileSync(join(distDir, "index.html"), "utf-8");
@@ -181,18 +181,21 @@ ${INDEXABLE_ROUTES.map(
 `;
 writeFileSync(join(distDir, "sitemap.xml"), sitemap, "utf-8");
 
-const noindexRoutes = Object.keys(PAGE_SEO).filter((p) => PAGE_SEO[p].noindex);
-const robots = `User-agent: *
-Allow: /
+// robots.txt comes from seo.js rather than being assembled here. This
+// file overwrites whatever public/robots.txt contained, so a rule added
+// only to the static copy would silently vanish from every real
+// deployment -- which is exactly what happened to the AI-crawler block.
+writeFileSync(join(distDir, "robots.txt"), robotsTxt(SITE_URL), "utf-8");
 
-${noindexRoutes.map((r) => `Disallow: ${r}`).join("\n")}
-
-Sitemap: ${SITE_URL}/sitemap.xml
-`;
-writeFileSync(join(distDir, "robots.txt"), robots, "utf-8");
+// llms.txt (llmstxt.org): a plain-text brief for language models. An
+// assistant asked "what's a good ATS resume checker?" works from whatever
+// prose it can extract, and a React app's markup is a poor summary of
+// what the product does -- this states it directly, including the limits,
+// so the tool is less likely to be described wrongly.
+writeFileSync(join(distDir, "llms.txt"), llmsTxt(SITE_URL), "utf-8");
 
 console.log(`\n[prerender] ${rendered}/${INDEXABLE_ROUTES.length} routes prerendered`);
-console.log(`[prerender] sitemap.xml + robots.txt written for ${SITE_URL}`);
+console.log(`[prerender] sitemap.xml + robots.txt + llms.txt written for ${SITE_URL}`);
 
 if (SITE_URL.includes("example.com")) {
   console.warn(

@@ -255,12 +255,71 @@ For pasted text, when there is no original file.
 Same response shape as `parse-file`, minus `format_analysis` (there is no file
 to analyze). `400` if `text` is empty.
 
-> **Known issue.** On the default path — no `tier` given — a request that
-> escalates to the LLM currently raises `AttributeError` and returns `500`
-> ([resume.py:144](../app/api/routes/resume.py#L144),
-> [resume.py:161](../app/api/routes/resume.py#L161)). This only occurs when an
-> LLM API key is configured *and* the confidence gate escalates. Passing an
-> explicit `tier` avoids it. See [Known issues](#known-issues).
+---
+
+## AI bullet rewriting
+
+### `POST /resume/rewrite-bullets`
+
+**Requires auth.** Unlike the scoring routes above, this endpoint has no
+anonymous path — scanning is deliberately open to anyone trying the tool cold
+from a search result, but a rewrite has a real per-call model cost and is a
+metered, paid feature, so it needs an account from the first call.
+
+Rewrites one role's bullets at a time — that is the unit both the pricing
+(`ai_rewrites` in `/billing/tiers`) and the model call are metered in, since a
+model that can see a role's other bullets avoids opening several of them with
+the same verb.
+
+```json
+{
+  "bullets": ["Responsible for the billing system.", "Helped with monitoring."],
+  "role_title": "Software Engineer",
+  "company": "Acme Corp",
+  "jd_text": "Looking for an engineer with Python and AWS experience."
+}
+```
+
+`role_title`, `company` and `jd_text` are optional. At most 12 bullets per
+request (one role's worth); at least one non-empty bullet is required.
+
+```json
+{
+  "bullets": [
+    {
+      "original": "Responsible for the billing system.",
+      "rewritten": "Owned the billing system end to end.",
+      "needs_metric": true,
+      "metric_hint": "How many transactions or users did this system serve, and what changed as a result of your ownership?"
+    }
+  ],
+  "rewrites_used": 4,
+  "rewrites_limit": 100,
+  "tier": "pro",
+  "model_quality": "quality"
+}
+```
+
+**The rewriter never invents a number.** When a bullet has no measurable
+outcome to begin with, the model improves what it honestly can — verb
+strength, scope, active voice — and sets `needs_metric: true` with a question
+in `metric_hint` naming the specific figure that would finish the bullet,
+rather than fabricating one. A fabricated metric is a claim the candidate
+would have to defend in an interview and cannot; see
+`app/core/llm/bullet_rewrite.py`'s module docstring.
+
+Which model answers depends on the caller's tier (`app/core/llm/
+tier_routing.py`): Free routes to the cheaper model, paid tiers to the
+better one — this is the one operation where plans differ in output quality,
+since scoring is computed locally and is identical on every tier.
+
+Allowance is checked before the model call and recorded only after it
+succeeds, so a failed request never spends a rewrite.
+
+**Status codes:** `400` no bullets, or more than 12 · `401` no account · `429`
+rewrite allowance spent this period (`detail.error ==
+"rewrite_limit_reached"`, same shape as the scan limiter below) · `502` the
+model returned nothing usable · `503` no LLM provider configured
 
 ---
 
@@ -653,20 +712,35 @@ first call for a given Firebase uid — there is no separate registration endpoi
   "name": "Jordan Alvarez",
   "tier": "free",
   "tier_name": "Free",
-  "jd_match_scans_per_month": 10,
-  "jd_match_scans_used_this_month": 1,
-  "jd_match_scans_reset_at": "2026-10-01T00:00:00Z",
-  "jd_match_scans_exhausted": false
+  "duration_days": 30,
+  "period_start": "2026-09-01T00:00:00Z",
+  "period_end": "2026-10-01T00:00:00Z",
+  "scans_limit": 5,
+  "scans_used": 1,
+  "scans_exhausted": false,
+  "scans_per_day": null,
+  "rewrites_limit": 3,
+  "rewrites_used": 0,
+  "rewrites_exhausted": false
 }
 ```
 
-`jd_match_scans_per_month: null` means unlimited.
+Two allowances are reported, and they are independent: running out of scans does
+not affect the rewrite count or vice versa (see
+`app/core/services/entitlement_service.py`).
 
-`jd_match_scans_reset_at` is midnight UTC on the 1st of next month — the instant
-the used-this-month counter returns to zero. It is always present, including on
-unlimited tiers, so a client rendering "resets on…" never has to special-case the
-tier. `jd_match_scans_exhausted` is a convenience flag: true only when the tier
-has a limit and the caller has reached it.
+`period_start`/`period_end` are the current allowance window, not necessarily a
+calendar month. Paid plans are fixed-length **passes** (Boost 7 days, Pro 30,
+Pro Season 90) — the window is anchored to when the pass was bought
+(`renews_at` minus the tier's `duration_days`), so a 7-day pass bought on the
+28th keeps its own 7-day window instead of resetting on the 1st. Only the Free
+tier, which has no purchase instant to anchor to, uses the calendar month.
+
+`scans_limit` / `rewrites_limit: null` means unlimited (not currently sold on
+any consumer tier). `scans_per_day` is a fair-use burst cap (`15` on Boost, Pro
+and Pro Season, `null` on Free) — checked independently of the period
+allowance, so a request can be refused for the daily cap even with scans left
+in the period.
 
 **Status codes:** `401` no or invalid token · `503` Firebase not configured
 
@@ -713,27 +787,36 @@ Public. Pricing and entitlements, read straight from `app/config.py`.
 {
   "consumer": {
     "free": {
-      "id": "free",
-      "name": "Free",
-      "monthly_price_usd": 0,
-      "annual_price_usd": null,
-      "jd_match_scans_per_month": 10,
-      "voice_minutes_per_month": 0,
-      "features": ["basic_ats_readiness_score", "json_resume_export"]
+      "id": "free", "name": "Free", "tagline": "Try it on one application.",
+      "price_inr": 0, "price_usd": 0, "duration_days": 30,
+      "jd_match_scans": 5, "ai_rewrites": 3, "scans_per_day": null,
+      "features": ["ats_readiness_score", "jd_match_report", "top_5_suggestions", "json_resume_export"]
     },
-    "starter": { "...": "$15/mo, $108/yr, unlimited scans" },
-    "pro":     { "...": "$29/mo, $216/yr, 60 voice minutes" },
-    "pro_plus":{ "...": "$45/mo, uncapped voice" }
+    "boost":      { "...": "Rs 149 / $4.99, 7-day pass, 30 scans, 30 rewrites" },
+    "pro":        { "...": "Rs 399 / $12.99, 30-day pass, 100 scans, 100 rewrites" },
+    "pro_season": { "...": "Rs 999 / $29.99, 90-day pass, 300 scans, 300 rewrites" }
   },
   "business": {
-    "team":     { "...": "$79/mo" },
-    "business": { "...": "$149/mo, SSO" }
-  }
+    "team":     { "...": "speculative, not launched -- see app/config.py" },
+    "business": { "...": "speculative, not launched -- see app/config.py" }
+  },
+  "display_order": ["free", "boost", "pro", "pro_season"],
+  "recommended": "pro",
+  "currencies": ["USD", "INR"],
+  "default_currency": "USD"
 }
 ```
 
-`null` for `jd_match_scans_per_month` or `voice_minutes_per_month` means
-unlimited; `0` for voice minutes means not included.
+Every consumer tier is a fixed-length **pass**, not a subscription — there is
+no `billing_cycle` field anywhere in this payload, because the tier itself
+determines both price and length (see `app/config.py`'s `Tier` docstring).
+`jd_match_scans` / `ai_rewrites`: `null` would mean unlimited (not currently
+sold on any consumer tier). `display_order` and `recommended` say how the
+pricing page should render and highlight the ladder — that is a commercial
+decision made once in the backend, not re-decided in the frontend.
+
+Business tiers are placeholders left over from an unshipped bias-audit
+product; do not put them on a real pricing page without repricing them.
 
 ### `POST /payments/create-order`
 
@@ -741,13 +824,19 @@ unlimited; `0` for voice minutes means not included.
 `created` status before the user has paid.
 
 ```json
-{ "tier": "pro", "billing_cycle": "monthly", "currency": "USD" }
+{ "tier": "pro", "currency": "USD" }
 ```
+
+There is no `billing_cycle` in the request — each tier is a single
+fixed-length pass with exactly one price per currency, so naming the tier
+settles both. Buying while a pass from the same tier ladder is still active
+**extends** the existing pass by the new duration rather than discarding the
+days already paid for.
 
 ```json
 {
   "order_id": "order_XXXXXXXXXXXX",
-  "amount": 2900,
+  "amount": 1299,
   "currency": "USD",
   "key_id": "rzp_test_XXXXXXXX",
   "tier": "pro",
@@ -758,8 +847,8 @@ unlimited; `0` for voice minutes means not included.
 `amount` is in the smallest currency unit. `key_id` is the **public** key for
 opening Razorpay's Checkout widget — the secret is never returned.
 
-**Status codes:** `400` unknown tier, invalid `billing_cycle`, a plan with no
-annual price, or a free plan · `401` · `503` Razorpay not configured
+**Status codes:** `400` unknown tier or a free plan · `401` · `503` Razorpay
+not configured
 
 ### `POST /payments/verify`
 
@@ -804,8 +893,7 @@ staying open; a closed tab must not mean a real payment goes unrecorded.
 
 | Issue | Impact | Location |
 | --- | --- | --- |
-| `provider_used` crash | `POST /resume/parse-text` and `/resume/parse-file` return `500` when no `tier` is passed *and* the confidence gate escalates to the LLM. Requires a configured LLM key to trigger. Workaround: pass an explicit `tier`. | [resume.py:144](../app/api/routes/resume.py#L144), [resume.py:161](../app/api/routes/resume.py#L161) |
-| `429` is overloaded | Rate limiting and exhausted plan allowance share a status code. Clients must read `detail` to tell them apart — a string for the former, an object with `error: "scan_limit_reached"` for the latter. | [scan.py:36](../app/api/routes/scan.py#L36), [rate_limit.py](../app/core/rate_limit.py) |
+| `429` is overloaded | Rate limiting and an exhausted allowance share a status code. Clients must read `detail` to tell them apart — a plain string for a rate limit, an object for an allowance limit with `error` set to `"scan_limit_reached"` or `"rewrite_limit_reached"` depending on which meter was hit. | [scan.py](../app/api/routes/scan.py), [rewrite.py](../app/api/routes/rewrite.py), [rate_limit.py](../app/core/rate_limit.py) |
 | Bias wordlist is fixed | Common coded terms outside the vocabulary are not detected. | [jd_bias_scanner.py:21](../app/core/bias_audit/jd_bias_scanner.py#L21) |
 
 ---

@@ -134,6 +134,13 @@ class TaskType(str, Enum):
     FAST_CLASSIFICATION = "fast_classification"
     EXTRACTION_CROSSCHECK = "extraction_crosscheck"
     RESUME_EXTRACTION = "resume_extraction"
+    # Rewriting a role's bullet points into quantified, JD-aware lines.
+    # Separate from FAST_CLASSIFICATION because it is the one operation
+    # subscribers are actually paying for, so it is worth spending a
+    # better model on even where the cheap one would technically answer
+    # -- and separate from RESUME_EXTRACTION because that is a
+    # structure-only job with no writing in it.
+    BULLET_REWRITE = "bullet_rewrite"
 
 
 class Provider(str, Enum):
@@ -184,26 +191,29 @@ def provider_for_tier(tier: Tier | str) -> Provider:
 
 # NOTE: keep this map, and only this map, in sync as the model landscape
 # moves. Nothing else in the codebase should reference a model string.
-# One row per provider for the three switchable task types; the fourth
-# task, EXTRACTION_CROSSCHECK, is deliberately absent here (see below).
+# One row per provider for the four switchable task types;
+# EXTRACTION_CROSSCHECK is deliberately absent here (see below).
 _MODEL_MAP: dict[Provider, dict[TaskType, str]] = {
     Provider.CLAUDE: {
         TaskType.CONVERSATIONAL_AGENT: "claude-sonnet-5",
         TaskType.DEEP_REASONING: "claude-opus-4-8",
         TaskType.FAST_CLASSIFICATION: "claude-haiku-4-5-20251001",
         TaskType.RESUME_EXTRACTION: "claude-sonnet-5",
+        TaskType.BULLET_REWRITE: "claude-sonnet-5",
     },
     Provider.GEMINI: {
         TaskType.CONVERSATIONAL_AGENT: "gemini-3.6-flash",
         TaskType.DEEP_REASONING: "gemini-3.1-pro",
         TaskType.FAST_CLASSIFICATION: "gemini-3.5-flash-lite",
         TaskType.RESUME_EXTRACTION: "gemini-3.6-flash",
+        TaskType.BULLET_REWRITE: "gemini-3.6-flash",
     },
     Provider.GROQ: {
         TaskType.CONVERSATIONAL_AGENT: "openai/gpt-oss-120b",
         TaskType.DEEP_REASONING: "qwen/qwen3.6-27b",
         TaskType.FAST_CLASSIFICATION: "openai/gpt-oss-20b",
         TaskType.RESUME_EXTRACTION: "openai/gpt-oss-120b",
+        TaskType.BULLET_REWRITE: "openai/gpt-oss-120b",
     },
 }
 

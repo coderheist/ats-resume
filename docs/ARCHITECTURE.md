@@ -444,11 +444,15 @@ users
     │                         created_at
     │
     ├──1:1──> subscriptions
-    │           tier, active, renews_at
-    │           voice_minutes_used_this_period
+    │           tier, active, renews_at  ← renews_at is a PASS's expiry
+    │                                      instant (purchase time + the
+    │                                      tier's duration_days), not a
+    │                                      recurring-billing anchor
     │
     ├──1:N──> payments
-    │           tier, billing_cycle
+    │           tier, billing_cycle  ← despite the name, holds the pass
+    │                                   length sold ("7d"/"30d"/"90d"),
+    │                                   kept for reconciliation only
     │           amount (smallest currency unit), currency
     │           razorpay_order_id   unique, indexed
     │           razorpay_payment_id unique, nullable, indexed
@@ -456,7 +460,7 @@ users
     │
     └──1:N──> usage_logs
                 user_id nullable  ← anonymous requests still recorded
-                action "jd_match_scan" | "standalone_scan" | "llm_call"
+                action "jd_match_scan" | "standalone_scan" | "ai_rewrite" | "llm_call"
                 provider, input_tokens, output_tokens, cost_usd
                 created_at indexed
 ```
@@ -543,10 +547,31 @@ because Firebase already handled account creation by the time it is reached.
 dataclasses, so billing logic, upgrade prompts, and the pricing page all read the
 same numbers.
 
-**Consumer tiers:** Free ($0, 10 scans/mo) · Starter ($15/mo, $108/yr, unlimited
-scans) · Pro ($29/mo, $216/yr, + 60 voice min) · Pro+ ($45/mo, uncapped voice)
+Every consumer tier is a fixed-length **pass**, bought outright — there is no
+auto-renewing subscription and no `billing_cycle` choice, because
+`razorpay_client.py` only implements one-time orders (no Razorpay
+Subscriptions/auto-debit integration). The tier itself carries a
+`duration_days`, which is also what the allowance window is anchored to
+(`entitlement_service.period_bounds`) rather than the calendar month — a
+7-day Boost pass bought on the 28th keeps its own 7-day window instead of
+resetting on the 1st.
 
-**Business tiers:** Team ($79/mo) · Business ($149/mo, + SSO)
+**Consumer tiers (INR / USD):** Free (Rs 0, 5 scans + 3 rewrites/mo) · Boost
+(Rs 149 / $4.99, 7-day pass, 30 scans + 30 rewrites) · Pro (Rs 399 / $12.99,
+30-day pass, 100 scans + 100 rewrites) · Pro Season (Rs 999 / $29.99, 90-day
+pass, 300 scans + 300 rewrites).
+
+Two allowances are metered independently: `jd_match_scans` and `ai_rewrites`.
+Scanning always runs on the same ("fast") model regardless of tier, because
+the score itself is computed locally (see Scoring above) and paying more
+cannot buy a different number. Rewriting is the one operation where tiers
+differ in output: Free routes to the cheaper model, paid tiers to the better
+one (`app/core/llm/tier_routing.py`), since the rewrite is the feature people
+are actually paying for.
+
+**Business tiers:** Team, Business — speculative placeholders from an
+unshipped bias-audit product, not part of the launch ladder. Do not surface
+them on a real pricing page without repricing.
 
 ### Payment flow
 

@@ -17,4 +17,47 @@ Disallow: /dashboard
 Disallow: /history
 Disallow: /settings
 
+# ---------------------------------------------------------------------
+# AI crawlers (GEO / AEO)
+#
+# Two different jobs are being allowed here, and they are worth keeping
+# apart because the trade-off differs.
+#
+#   Retrieval crawlers (OAI-SearchBot, PerplexityBot, ClaudeBot) fetch a
+#   page to answer a question a user is asking right now, and cite it.
+#   That is a referral channel: for a tool people find by asking "how do
+#   I check my resume against a job description", being quotable in that
+#   answer is the whole opportunity. Allowed.
+#
+#   Training crawlers (GPTBot, Google-Extended, CCBot) take content to
+#   train future models, with no citation and no traffic back. Allowed
+#   here too, deliberately: the pages they can reach are public marketing
+#   and explanatory copy, and being present in model weights is itself
+#   how a tool gets recommended when someone asks an assistant for one.
+#
+# Note that none of this touches user data. Every authenticated surface
+# is disallowed above, so no resume, scan, or account page is reachable
+# by any crawler regardless of what it is for.
+#
+# To opt out of training while keeping AI search referrals, set GPTBot,
+# Google-Extended and CCBot to Disallow and leave the rest as they are.
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
 Sitemap: https://resume-optimizer.example.com/sitemap.xml

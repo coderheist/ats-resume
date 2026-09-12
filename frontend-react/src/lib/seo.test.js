@@ -64,7 +64,7 @@ describe("route metadata", () => {
   it("appends the site name once, leading with the page-specific part", () => {
     // Search results and browser tabs both truncate from the right, so
     // the distinguishing words have to come first.
-    expect(titleFor("/pricing")).toBe("Pricing — Free ATS Scans & Unlimited Plans | Resume Optimizer");
+    expect(titleFor("/pricing")).toBe("Pricing — Resume Scans & AI Rewrites from ₹149 | Resume Optimizer");
     expect(titleFor("/pricing").match(/Resume Optimizer/g)).toHaveLength(1);
   });
 

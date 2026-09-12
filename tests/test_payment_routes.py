@@ -1,4 +1,5 @@
 import hashlib
+import itertools
 import hmac
 import json
 from dataclasses import replace
@@ -68,32 +69,44 @@ def _sign_webhook(raw_body: bytes, webhook_secret: str) -> str:
 
 class TestCreateOrderValidation:
     def test_requires_auth(self, client):
-        resp = client.post("/payments/create-order", json={"tier": "pro", "billing_cycle": "monthly", "currency": "USD"})
+        resp = client.post("/payments/create-order", json={"tier": "pro", "currency": "USD"})
         assert resp.status_code == 401
 
     def test_unknown_tier_is_400(self, client):
-        resp = client.post("/payments/create-order", json={"tier": "nonexistent", "billing_cycle": "monthly", "currency": "USD"}, headers=AUTH_HEADERS)
+        resp = client.post("/payments/create-order", json={"tier": "nonexistent", "currency": "USD"}, headers=AUTH_HEADERS)
         assert resp.status_code == 400
 
     def test_free_tier_cannot_be_checked_out(self, client):
-        resp = client.post("/payments/create-order", json={"tier": "free", "billing_cycle": "monthly", "currency": "USD"}, headers=AUTH_HEADERS)
+        resp = client.post("/payments/create-order", json={"tier": "free", "currency": "USD"}, headers=AUTH_HEADERS)
         assert resp.status_code == 400
         assert "free plan" in resp.json()["detail"].lower()
 
-    def test_billing_cycle_not_offered_by_tier_is_400(self, client):
-        # pro_plus has annual_price_usd=None in config.py
-        resp = client.post("/payments/create-order", json={"tier": "pro_plus", "billing_cycle": "annual", "currency": "USD"}, headers=AUTH_HEADERS)
-        assert resp.status_code == 400
-        assert "annual" in resp.json()["detail"]
-
-    def test_invalid_billing_cycle_string_is_400(self, client):
-        resp = client.post("/payments/create-order", json={"tier": "pro", "billing_cycle": "weekly", "currency": "USD"}, headers=AUTH_HEADERS)
-        assert resp.status_code == 400
+    def test_every_consumer_tier_is_purchasable_in_both_currencies(self, client, monkeypatch):
+        """Replaces the old "this tier doesn't offer annual billing"
+        tests. Plans are now fixed-length passes with exactly one price
+        per currency, so there is no combination that can be unavailable
+        -- and that is worth pinning, because the previous model's
+        None-priced combinations were a real source of 400s."""
+        monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
+        monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
+        seq = itertools.count()
+        monkeypatch.setattr(
+            "app.api.routes.payments.create_order",
+            lambda **kw: {"id": f"order_{next(seq)}", **kw},
+        )
+        for tier_id in ("boost", "pro", "pro_season"):
+            for currency in ("USD", "INR"):
+                resp = client.post(
+                    "/payments/create-order",
+                    json={"tier": tier_id, "currency": currency},
+                    headers=AUTH_HEADERS,
+                )
+                assert resp.status_code == 200, f"{tier_id}/{currency}: {resp.text}"
 
     def test_returns_503_when_razorpay_not_configured(self, client, monkeypatch):
         monkeypatch.delenv("RAZORPAY_KEY_ID", raising=False)
         monkeypatch.delenv("RAZORPAY_KEY_SECRET", raising=False)
-        resp = client.post("/payments/create-order", json={"tier": "pro", "billing_cycle": "monthly", "currency": "USD"}, headers=AUTH_HEADERS)
+        resp = client.post("/payments/create-order", json={"tier": "pro", "currency": "USD"}, headers=AUTH_HEADERS)
         assert resp.status_code == 503
 
 
@@ -103,12 +116,12 @@ class TestCreateOrderSuccess:
         monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
 
         with patch("app.api.routes.payments.create_order", return_value={"id": "order_fake123", "amount": 2900, "currency": "USD", "status": "created"}):
-            resp = client.post("/payments/create-order", json={"tier": "pro", "billing_cycle": "monthly", "currency": "USD"}, headers=AUTH_HEADERS)
+            resp = client.post("/payments/create-order", json={"tier": "pro", "currency": "USD"}, headers=AUTH_HEADERS)
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["order_id"] == "order_fake123"
-        assert body["amount"] == 2900  # $29.00 -> 2900 cents
+        assert body["amount"] == 1299  # pro, $12.99 -> 1299 cents
         assert body["key_id"] == "rzp_test_fake"  # public key exposed, correctly
         assert "key_secret" not in body and "fake_secret" not in json.dumps(body)  # secret never exposed
 
@@ -116,11 +129,11 @@ class TestCreateOrderSuccess:
         assert payment is not None
         assert payment.status == "created"
         assert payment.tier == "pro"
-        assert payment.amount == 2900
+        assert payment.amount == 1299
 
 
 class TestVerifyPayment:
-    def _seed_payment(self, db_session, order_id="order_abc", tier="pro", billing_cycle="monthly"):
+    def _seed_payment(self, db_session, order_id="order_abc", tier="pro", billing_cycle="30d"):
         from app.core.services.user_service import get_or_create_user
         from app.core.auth.dependencies import AuthenticatedUser
         user = get_or_create_user(db_session, AuthenticatedUser(uid="test-uid", email="jordan@example.com", name="Jordan"))
@@ -199,7 +212,7 @@ class TestWebhook:
         from app.core.services.user_service import get_or_create_user
         from app.core.auth.dependencies import AuthenticatedUser
         user = get_or_create_user(db_session, AuthenticatedUser(uid="test-uid", email="jordan@example.com", name="Jordan"))
-        db_session.add(Payment(user_id=user.id, tier="pro", billing_cycle="monthly", amount=2900, currency="USD", razorpay_order_id=order_id, status="created"))
+        db_session.add(Payment(user_id=user.id, tier="pro", billing_cycle="30d", amount=2900, currency="USD", razorpay_order_id=order_id, status="created"))
         db_session.commit()
         return user
 
@@ -326,7 +339,7 @@ class TestWebhookMalformedPayloads:
 
         user = get_or_create_user(db_session, AuthenticatedUser(uid="test-uid", email="j@example.com", name="J"))
         db_session.add(Payment(
-            user_id=user.id, tier="pro", billing_cycle="monthly", amount=2900,
+            user_id=user.id, tier="pro", billing_cycle="30d", amount=2900,
             currency="USD", razorpay_order_id="order_hardening_1", status="created",
         ))
         db_session.commit()
@@ -352,10 +365,10 @@ class TestCreateOrderFailureModes:
         monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
         monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
 
-    def _order(self, client, tier="starter", cycle="monthly"):
+    def _order(self, client, tier="boost"):
         return client.post(
             "/payments/create-order",
-            json={"tier": tier, "billing_cycle": cycle, "currency": "USD"},
+            json={"tier": tier, "currency": "USD"},
             headers=AUTH_HEADERS,
         )
 
@@ -370,8 +383,8 @@ class TestCreateOrderFailureModes:
         )
         # A tier priced under Razorpay's 100-unit floor.
         monkeypatch.setitem(
-            B2C_TIERS, "starter",
-            replace(B2C_TIERS["starter"], monthly_price_usd=0.5),
+            B2C_TIERS, "boost",
+            replace(B2C_TIERS["boost"], price_usd=0.5),
         )
 
         resp = self._order(client)
@@ -405,7 +418,7 @@ class TestCreateOrderFailureModes:
         assert resp.status_code == 200
         body = resp.json()
         assert body["order_id"] == "order_ok_1"
-        assert body["amount"] == 1500  # starter, $15 -> smallest unit
+        assert body["amount"] == 499  # boost, $4.99 -> smallest unit
         assert body["key_id"] == "rzp_test_fake"
         # The secret must never appear in a response the browser reads.
         assert "fake_secret" not in resp.text
@@ -422,33 +435,41 @@ class TestCurrency:
         monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_fake")
         monkeypatch.setenv("RAZORPAY_KEY_SECRET", "fake_secret")
 
-    def _order(self, client, monkeypatch, currency, tier="starter", cycle="monthly"):
+    def _order(self, client, monkeypatch, currency, tier="boost"):
         monkeypatch.setattr(
             "app.api.routes.payments.create_order",
-            lambda **kw: {"id": f"order_{currency}_{cycle}", **kw},
+            lambda **kw: {"id": f"order_{currency}_{tier}", **kw},
         )
         return client.post(
             "/payments/create-order",
-            json={"tier": tier, "billing_cycle": cycle, "currency": currency},
+            json={"tier": tier, "currency": currency},
             headers=AUTH_HEADERS,
         )
 
     def test_usd_uses_the_usd_price(self, client, monkeypatch):
         body = self._order(client, monkeypatch, "USD").json()
         assert body["currency"] == "USD"
-        assert body["amount"] == 1500  # $15.00 in cents
+        assert body["amount"] == 499  # $4.99 in cents
 
     def test_inr_uses_the_listed_inr_price_not_a_conversion(self, client, monkeypatch):
         body = self._order(client, monkeypatch, "INR").json()
         assert body["currency"] == "INR"
-        assert body["amount"] == 124900  # Rs 1,249 in paise -- config.py's own number
+        assert body["amount"] == 14900  # Rs 149 in paise -- config.py's own number
 
-    def test_annual_respects_the_currency_too(self, client, monkeypatch):
-        assert self._order(client, monkeypatch, "INR", cycle="annual").json()["amount"] == 899900
-        assert self._order(client, monkeypatch, "USD", cycle="annual").json()["amount"] == 10800
+    def test_each_pass_length_respects_the_currency_too(self, client, monkeypatch):
+        assert self._order(client, monkeypatch, "INR", tier="pro").json()["amount"] == 39900
+        assert self._order(client, monkeypatch, "USD", tier="pro").json()["amount"] == 1299
+        assert self._order(client, monkeypatch, "INR", tier="pro_season").json()["amount"] == 99900
+        assert self._order(client, monkeypatch, "USD", tier="pro_season").json()["amount"] == 2999
 
     def test_currency_is_case_insensitive(self, client, monkeypatch):
         assert self._order(client, monkeypatch, "inr").json()["currency"] == "INR"
+
+    def test_surrounding_whitespace_is_tolerated(self, client, monkeypatch):
+        """A stray space from a config value or a hand-edited request
+        otherwise produced a baffling "Unsupported currency ' inr '"
+        for a value that is plainly correct."""
+        assert self._order(client, monkeypatch, "  inr  ").json()["currency"] == "INR"
 
     def test_unsupported_currency_is_a_400_naming_the_valid_ones(self, client, monkeypatch):
         resp = self._order(client, monkeypatch, "EUR")
@@ -459,14 +480,18 @@ class TestCurrency:
         """Reconciliation depends on this: an amount without its currency
         is meaningless when two are in play."""
         self._order(client, monkeypatch, "INR")
-        row = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_INR_monthly").first()
+        row = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_INR_boost").first()
         assert row.currency == "INR"
-        assert row.amount == 124900
+        assert row.amount == 14900
 
-    def test_a_plan_without_an_annual_option_is_rejected_in_either_currency(self, client, monkeypatch):
-        for code in ("USD", "INR"):
-            resp = self._order(client, monkeypatch, code, tier="pro_plus", cycle="annual")
-            assert resp.status_code == 400, code
+    def test_the_stored_row_records_the_pass_length_that_was_sold(self, client, db_session, monkeypatch):
+        """Payment.billing_cycle is now a record of the pass length
+        bought ("7d"/"30d"/"90d"). Nothing reads it to make a decision --
+        activation takes the duration from the tier -- but reconciling a
+        refund needs to know what the customer actually paid for."""
+        self._order(client, monkeypatch, "INR", tier="pro_season")
+        row = db_session.query(Payment).filter(Payment.razorpay_order_id == "order_INR_pro_season").first()
+        assert row.billing_cycle == "90d"
 
 
 class TestTiersEndpointCurrencies:
@@ -479,6 +504,6 @@ class TestTiersEndpointCurrencies:
         body = client.get("/billing/tiers").json()
         for group in ("consumer", "business"):
             for tid, tier in body[group].items():
-                for field in ("monthly_price_usd", "monthly_price_inr",
-                              "annual_price_usd", "annual_price_inr"):
+                for field in ("price_usd", "price_inr", "duration_days",
+                              "jd_match_scans", "ai_rewrites"):
                     assert field in tier, f"{tid} missing {field}"

@@ -108,8 +108,11 @@ class GapAnswerRequest(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
-    tier: str  # e.g. "starter", "pro", "pro_plus", "team", "business" -- see app/config.py
-    billing_cycle: str = "monthly"  # "monthly" | "annual"
+    # One of app/config.py's B2C_TIERS ids: "boost", "pro", "pro_season".
+    # There is no billing_cycle -- every plan is a fixed-length pass whose
+    # duration is a property of the tier (see config.Tier's docstring), so
+    # the buyer picks a plan and that settles both price and length.
+    tier: str
     currency: str = "USD"
 
 
@@ -117,3 +120,22 @@ class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+
+
+class RewriteBulletsRequest(BaseModel):
+    """One role's bullets, rewritten together.
+
+    A whole role rather than a single line, because that is the unit the
+    pricing meters (one request = one rewrite) and because the model
+    writes better bullets when it can see its own neighbours -- rewriting
+    lines one at a time reliably produces four in a row that open with
+    the same verb.
+    """
+    bullets: list[str]
+    role_title: str | None = None
+    company: str | None = None
+    # Optional. When present the rewrite prefers the posting's vocabulary,
+    # but only where the candidate's stated work genuinely matches it --
+    # see bullet_rewrite.py on why keyword-matching beyond that is
+    # fabrication.
+    jd_text: str | None = None

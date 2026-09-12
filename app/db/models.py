@@ -104,7 +104,14 @@ class Payment(Base):
     id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
     user_id = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
     tier = Column(String, nullable=False)  # which tier this checkout was for -- see app/config.py
-    billing_cycle = Column(String, nullable=False)  # "monthly" | "annual"
+    # The pass length this payment bought, as a label like "7d"/"30d"/"90d".
+    # Named billing_cycle for historical reasons -- it held "monthly" /
+    # "annual" when plans auto-renewed. Kept rather than renamed because
+    # it is purely a record of what was sold (useful for reconciliation
+    # and refunds) and nothing reads it to make a decision: activation
+    # takes the duration from the tier, so a rename would be a migration
+    # with no behavioural payoff.
+    billing_cycle = Column(String, nullable=False)
     amount = Column(Integer, nullable=False)  # smallest currency unit
     currency = Column(String, nullable=False)  # "USD" | "INR" | ...
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)

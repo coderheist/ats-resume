@@ -29,7 +29,6 @@ from app.schemas.api_models import CheckoutRequest, VerifyPaymentRequest
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
-_BILLING_CYCLE_DAYS = {"monthly": 30, "annual": 365}
 
 # Razorpay's floor for an order, in the smallest currency unit.
 MIN_ORDER_AMOUNT = 100
@@ -37,18 +36,40 @@ MIN_ORDER_AMOUNT = 100
 _log = logging.getLogger(__name__)
 
 
-def _activate_subscription(db: Session, user: User, tier_id: str, billing_cycle: str) -> None:
+def _activate_subscription(db: Session, user: User, tier_id: str) -> None:
     """Shared by both the client-verify path and the webhook path below --
     one place that actually flips a Subscription to a paid tier, so the
     two paths (whichever fires first, or both) can't drift into
-    disagreeing about what "activated" means."""
+    disagreeing about what "activated" means.
+
+    The pass length comes from the tier itself, not from a billing cycle:
+    plans are fixed-length passes (Boost 7 days, Pro 30, Pro Season 90),
+    so there is nothing for the caller to choose. `renews_at` is the
+    expiry instant, and entitlement_service.period_bounds() reads back
+    from it to decide which usage counts against the allowance -- which
+    is why it must be set from the same duration the buyer was charged
+    for.
+
+    Buying while a pass is already running EXTENDS it rather than
+    discarding the remainder: a user who upgrades mid-pass would
+    otherwise silently lose the days they already paid for, which is the
+    kind of thing that produces a refund request.
+    """
+    tier = entitlement_for(tier_id)
     subscription = db.query(Subscription).filter(Subscription.user_id == user.id).first()
     if subscription is None:
         subscription = Subscription(user_id=user.id)
         db.add(subscription)
+
+    now = datetime.utcnow()
+    unexpired = (
+        subscription.renews_at
+        if subscription.active and subscription.renews_at and subscription.renews_at > now
+        else now
+    )
     subscription.tier = tier_id
     subscription.active = True
-    subscription.renews_at = datetime.utcnow() + timedelta(days=_BILLING_CYCLE_DAYS[billing_cycle])
+    subscription.renews_at = unexpired + timedelta(days=tier.duration_days)
 
 
 @router.post("/create-order")
@@ -61,10 +82,11 @@ def create_order_route(
     resulting subscription to. Returns the Razorpay order id and the
     PUBLIC key_id (never the secret) for the frontend to open Razorpay's
     Checkout widget with."""
-    if request.billing_cycle not in _BILLING_CYCLE_DAYS:
-        raise HTTPException(status_code=400, detail="billing_cycle must be 'monthly' or 'annual'.")
-
-    currency = (request.currency or DEFAULT_CURRENCY).upper()
+    # Stripped as well as upper-cased: the currency can arrive from a
+    # config value or a hand-edited request, and a stray space is the
+    # kind of thing that produces a baffling "Unsupported currency
+    # ' inr '" when the value is plainly right.
+    currency = (request.currency or DEFAULT_CURRENCY).strip().upper()
     if currency not in SUPPORTED_CURRENCIES:
         raise HTTPException(
             status_code=400,
@@ -80,9 +102,7 @@ def create_order_route(
     # the USD one. INR is priced separately in config.py, so a customer is
     # charged the number the pricing page showed them rather than whatever
     # an exchange rate produced in between.
-    price = price_for(tier, request.billing_cycle, currency)
-    if price is None:
-        raise HTTPException(status_code=400, detail=f"The '{tier.name}' plan doesn't offer {request.billing_cycle} billing.")
+    price = price_for(tier, currency)
     if price <= 0:
         raise HTTPException(status_code=400, detail="Can't create a checkout for a free plan.")
 
@@ -111,8 +131,15 @@ def create_order_route(
     try:
         order = create_order(
             amount=amount_smallest_unit, currency=currency,
-            receipt=f"{user.id}-{tier.id}-{request.billing_cycle}"[:40],  # Razorpay caps receipt at 40 chars
-            notes={"user_id": user.id, "tier": tier.id, "billing_cycle": request.billing_cycle},
+            # Razorpay caps the receipt at 40 characters, and a user id is
+            # a 36-char UUID -- putting it first left three characters for
+            # the tier, so "pro", "pro_season" and "pro_plus" all
+            # truncated to the same string. The receipt exists to make a
+            # payment reconcilable after the fact, so the tier (the part
+            # that says what was sold) leads and the user id takes
+            # whatever room is left; the order id remains the unique key.
+            receipt=f"{tier.id}-{user.id}"[:40],
+            notes={"user_id": user.id, "tier": tier.id, "duration_days": tier.duration_days},
         )
     except BillingNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -133,7 +160,7 @@ def create_order_route(
         ) from exc
 
     db.add(Payment(
-        user_id=user.id, tier=tier.id, billing_cycle=request.billing_cycle,
+        user_id=user.id, tier=tier.id, billing_cycle=f"{tier.duration_days}d",
         amount=amount_smallest_unit, currency=currency,
         razorpay_order_id=order["id"], status="created",
     ))
@@ -177,7 +204,7 @@ def verify_payment_route(
     if payment.status != "paid":  # idempotent -- this or the webhook may already have done this
         payment.razorpay_payment_id = request.razorpay_payment_id
         payment.status = "paid"
-        _activate_subscription(db, user, payment.tier, payment.billing_cycle)
+        _activate_subscription(db, user, payment.tier)
         db.commit()
 
     return {"status": "paid", "tier": payment.tier}
@@ -228,7 +255,7 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)) -> d
             payment.status = "paid"
             user = db.query(User).filter(User.id == payment.user_id).first()
             if user:
-                _activate_subscription(db, user, payment.tier, payment.billing_cycle)
+                _activate_subscription(db, user, payment.tier)
             db.commit()
     elif event == "payment.failed" and order_id:
         payment = db.query(Payment).filter(Payment.razorpay_order_id == order_id).first()

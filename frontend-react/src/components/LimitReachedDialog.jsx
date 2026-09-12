@@ -16,6 +16,12 @@ import { formatResetAt, formatResetCountdown } from "../lib/usageLimit";
  * before on close, Escape dismisses, and the backdrop is click-to-close,
  * so it behaves like a dialog for keyboard and screen-reader users too.
  */
+const LIMIT_COPY = {
+  scan_limit_reached: { title: "You've used all your scans", noun: "scans" },
+  rewrite_limit_reached: { title: "You've used all your AI rewrites", noun: "AI rewrites" },
+  default: { title: "You've reached a plan limit", noun: "uses" },
+};
+
 export function LimitReachedDialog({ detail, onClose }) {
   const dialogRef = useRef(null);
 
@@ -34,6 +40,16 @@ export function LimitReachedDialog({ detail, onClose }) {
   }, [onClose]);
 
   if (!detail) return null;
+
+  // Which allowance ran out comes from the 429 body itself rather than a
+  // prop, so a route that starts metering something new only has to send
+  // its own `error` code -- no call site needs updating, and the two can
+  // never disagree about which limit was actually hit.
+  //
+  // The old copy also offered to "upgrade for unlimited scans". No plan
+  // is unlimited any more, so that sentence promised something checkout
+  // would not sell.
+  const copy = LIMIT_COPY[detail.error] || LIMIT_COPY.default;
 
   const resetAt = formatResetAt(detail.resets_at);
   const countdown = formatResetCountdown(detail.resets_at);
@@ -54,13 +70,13 @@ export function LimitReachedDialog({ detail, onClose }) {
           <X size={16} />
         </button>
 
-        <h2 id="limit-dialog-title">You've used all your scans this month</h2>
+        <h2 id="limit-dialog-title">{copy.title}</h2>
 
         <p id="limit-dialog-body" className="limit-dialog-body">
           {detail.limit != null
-            ? `You've run all ${detail.limit} scans included in your current plan.`
-            : "Your monthly scan allowance is used up."}{" "}
-          Pick up again when it resets, or upgrade for unlimited scans right away.
+            ? `You've used all ${detail.limit} ${copy.noun} included in your current plan.`
+            : `Your ${copy.noun} allowance is used up.`}{" "}
+          Pick up again when it resets, or move to a bigger plan now.
         </p>
 
         {resetAt && (
